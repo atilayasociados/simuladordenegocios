@@ -1,0 +1,1990 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Manual del Profesor · SimNego v3.2 UAGRM</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,700;0,900;1,700&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+  /* ── Variables ─────────────────────────────────── */
+  :root {
+    --ink:       #0B0E14;
+    --ink-2:     #111318;
+    --ink-3:     #1A1F2A;
+    --gold:      #9ED830;
+    --gold-lt:   #C0ED60;
+    --gold-pale: #E8F9C0;
+    --cream:     #F0F4F8;
+    --white:     #FFFFFF;
+    --muted:     #8A96A8;
+    --accent1:   #9ED830;
+    --accent2:   #7BC62F;
+    --accent3:   #C0ED60;
+    --danger:    #E53935;
+    --sidebar-w: 270px;
+    --radius:    12px;
+    --shadow:    0 8px 40px rgba(0,0,0,0.5);
+    --font-disp: 'Playfair Display', Georgia, serif;
+    --font-body: 'DM Sans', sans-serif;
+    --font-mono: 'DM Mono', monospace;
+  }
+
+  /* ── Reset & Base ──────────────────────────────── */
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; font-size: 16px; }
+
+  body {
+    background: #0B0E14;
+    color: var(--cream);
+    font-family: var(--font-body);
+    line-height: 1.7;
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* ── Grain overlay ──────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 512 512' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.75' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+    background-size: 200px 200px;
+    pointer-events: none;
+    z-index: 0;
+    opacity: .5;
+  }
+
+  /* ── Layout ─────────────────────────────────────── */
+  .layout { display: flex; min-height: 100vh; position: relative; z-index: 1; }
+
+  /* ── Sidebar ────────────────────────────────────── */
+  .sidebar {
+    width: var(--sidebar-w);
+    min-height: 100vh;
+    background: #111318;
+    border-right: 1px solid rgba(125,194,66,0.12);
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+    z-index: 100;
+    transition: transform .3s ease;
+  }
+
+  .sidebar-logo {
+    padding: 32px 24px 20px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .sidebar-logo .sim-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: var(--gold);
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 8px;
+  }
+  .sidebar-logo h1 {
+    font-family: var(--font-disp);
+    font-size: 1.55rem;
+    font-weight: 900;
+    color: var(--white);
+    line-height: 1.2;
+  }
+  .sidebar-logo h1 span { color: var(--gold); }
+
+  .sidebar-subtitle {
+    font-size: .78rem;
+    color: var(--muted);
+    margin-top: 6px;
+    font-weight: 300;
+    letter-spacing: .5px;
+  }
+
+  .sidebar-nav { padding: 20px 0; flex: 1; }
+  .nav-section-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    letter-spacing: 2.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+    padding: 14px 24px 6px;
+  }
+
+  .nav-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 22px;
+    color: rgba(255,255,255,0.5);
+    text-decoration: none;
+    font-size: .84rem;
+    font-weight: 400;
+    cursor: pointer;
+    border-left: 2px solid transparent;
+    border-radius: 0 6px 6px 0;
+    transition: all .2s ease;
+  }
+  .nav-item:hover {
+    color: rgba(255,255,255,0.85);
+    background: rgba(255,255,255,0.03);
+    border-left-color: rgba(158,216,48,0.5);
+  }
+  .nav-item.active {
+    color: #9ED830;
+    background: rgba(158,216,48,0.08);
+    border-left-color: #9ED830;
+    font-weight: 600;
+  }
+  .nav-item .nav-icon {
+    width: 22px; height: 22px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; flex-shrink: 0;
+  }
+  .nav-item .nav-num {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: #9ED830;
+    opacity: .6;
+    margin-left: auto;
+    flex-shrink: 0;
+  }
+
+  .sidebar-footer {
+    padding: 18px 24px;
+    border-top: 1px solid rgba(125,194,66,0.09);
+  }
+  .sidebar-footer p {
+    font-size: .72rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .sidebar-footer strong { color: #9ED830; }
+
+  /* ── Mobile sidebar toggle ─────────────────────── */
+  .menu-toggle {
+    display: none;
+    position: fixed;
+    top: 16px; left: 16px;
+    z-index: 200;
+    background: var(--ink-2);
+    border: 1px solid rgba(255,255,255,0.12);
+    color: var(--gold);
+    width: 44px; height: 44px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 20px;
+    align-items: center; justify-content: center;
+  }
+
+  /* ── Main content ───────────────────────────────── */
+  .main {
+    margin-left: var(--sidebar-w);
+    flex: 1;
+    padding: 0 0 80px;
+    max-width: 960px;
+  }
+
+  /* ── Hero ───────────────────────────────────────── */
+  .hero {
+    padding: 64px 60px 50px;
+    position: relative;
+    overflow: hidden;
+    border-bottom: 1px solid rgba(125,194,66,0.09);
+  }
+  .hero::before {
+    content: 'SimNeg UAGRM';
+    position: absolute;
+    right: -10px; top: -20px;
+    font-family: var(--font-disp);
+    font-size: 160px;
+    font-weight: 900;
+    color: rgba(255,255,255,0.04);
+    letter-spacing: -8px;
+    pointer-events: none;
+    line-height: 1;
+  }
+  .hero-tag {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 3px;
+    color: #9ED830;
+    text-transform: uppercase;
+    display: inline-block;
+    background: rgba(158,216,48,0.1);
+    border: 1px solid rgba(158,216,48,0.3);
+    padding: 4px 14px;
+    border-radius: 100px;
+    margin-bottom: 20px;
+  }
+  .hero h2 {
+    font-family: var(--font-disp);
+    font-size: clamp(2rem, 4vw, 3rem);
+    font-weight: 900;
+    line-height: 1.15;
+    color: var(--white);
+    margin-bottom: 16px;
+  }
+  .hero h2 em { color: #9ED830; font-style: italic; }
+  .hero-desc {
+    font-size: 1.05rem;
+    color: rgba(255,255,255,0.6);
+    max-width: 600px;
+    line-height: 1.75;
+    font-weight: 300;
+  }
+  .hero-badges {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    margin-top: 28px;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(125,194,66,0.2);
+    padding: 6px 14px;
+    border-radius: 100px;
+    font-size: .78rem;
+    color: rgba(253,250,243,0.75);
+    font-weight: 400;
+  }
+  .badge span { font-size: 14px; }
+
+  /* ── Progress bar decorative ───────────────────── */
+  .progress-bar-deco {
+    height: 3px;
+    background: linear-gradient(90deg, #9ED830, #C0ED60, #9ED830);
+    width: 100%;
+  }
+
+  /* ── Sections ───────────────────────────────────── */
+  .section {
+    padding: 56px 60px 20px;
+    opacity: 0;
+    transform: translateY(20px);
+    transition: opacity .5s ease, transform .5s ease;
+  }
+  .section.visible { opacity: 1; transform: translateY(0); }
+
+  .section-header {
+    display: flex; align-items: flex-start; gap: 20px;
+    margin-bottom: 32px;
+    padding-bottom: 24px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+  }
+  .section-num {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 2px;
+    color: #9ED830;
+    background: rgba(158,216,48,0.08);
+    width: 42px; height: 42px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    font-weight: 500;
+    margin-top: 4px;
+  }
+  .section-title-block h3 {
+    font-family: var(--font-disp);
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: var(--white);
+    line-height: 1.2;
+  }
+  .section-title-block p {
+    font-size: .85rem;
+    color: var(--muted);
+    margin-top: 4px;
+    font-weight: 300;
+  }
+
+  /* ── Prose ──────────────────────────────────────── */
+  .prose {
+    font-size: .95rem;
+    color: rgba(253,250,243,0.8);
+    line-height: 1.8;
+    font-weight: 300;
+  }
+  .prose strong { color: var(--cream); font-weight: 600; }
+  .prose em { color: var(--gold-lt); font-style: italic; }
+
+  /* ── Cards grid ─────────────────────────────────── */
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-top: 24px;
+  }
+  .card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: var(--radius);
+    padding: 22px 22px 20px;
+    transition: all .25s ease;
+    cursor: default;
+    position: relative;
+    overflow: hidden;
+    backdrop-filter: blur(4px);
+  }
+  .card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    border-radius: var(--radius) var(--radius) 0 0;
+    background: var(--card-accent, var(--gold));
+    opacity: 0;
+    transition: opacity .25s ease;
+  }
+  .card:hover { 
+    background: rgba(255,255,255,0.06);
+    border-color: rgba(125,194,66,0.2);
+    transform: translateY(-2px);
+    box-shadow: 0 12px 32px rgba(0,0,0,0.6);
+  }
+  .card:hover::before { opacity: 1; }
+  .card-icon { font-size: 28px; margin-bottom: 12px; display: block; }
+  .card h4 {
+    font-family: var(--font-disp);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--white);
+    margin-bottom: 8px;
+    line-height: 1.3;
+  }
+  .card p {
+    font-size: .84rem;
+    color: rgba(253,250,243,0.6);
+    line-height: 1.65;
+    font-weight: 300;
+  }
+  .card .ref-tag {
+    display: inline-block;
+    margin-top: 10px;
+    font-size: .72rem;
+    font-family: var(--font-mono);
+    color: #9ED830;
+    background: rgba(158,216,48,0.08);
+    padding: 3px 8px;
+    border-radius: 4px;
+  }
+
+  /* ── KPI Table ──────────────────────────────────── */
+  .kpi-table-wrap { overflow-x: auto; margin-top: 24px; border-radius: var(--radius); }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: .84rem;
+  }
+  thead {
+    background: rgba(158,216,48,0.07);
+  }
+  thead th {
+    padding: 14px 16px;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: .73rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #9ED830;
+    font-weight: 500;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    white-space: nowrap;
+  }
+  tbody tr {
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    transition: background .2s;
+  }
+  tbody tr:hover { background: rgba(158,216,48,0.04); }
+  tbody td {
+    padding: 13px 16px;
+    color: rgba(253,250,243,0.8);
+    vertical-align: top;
+    line-height: 1.55;
+  }
+  tbody td:first-child {
+    color: var(--white);
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  tbody td .ref-inline {
+    display: block;
+    font-size: .72rem;
+    font-family: var(--font-mono);
+    color: var(--gold);
+    margin-top: 4px;
+    opacity: .8;
+  }
+
+  /* ── Process timeline ───────────────────────────── */
+  .timeline { margin-top: 24px; position: relative; }
+  .timeline::before {
+    content: '';
+    position: absolute;
+    left: 22px; top: 0; bottom: 0;
+    width: 2px;
+    background: linear-gradient(180deg, var(--gold) 0%, rgba(125,194,66,0.09) 100%);
+  }
+  .timeline-item {
+    display: flex;
+    gap: 22px;
+    padding-bottom: 28px;
+    position: relative;
+  }
+  .timeline-dot {
+    width: 44px; height: 44px;
+    border-radius: 50%;
+    background: var(--ink-2);
+    border: 2px solid var(--gold);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 16px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 1;
+    box-shadow: 0 0 0 4px var(--ink);
+  }
+  .timeline-content { padding-top: 8px; }
+  .timeline-content h4 {
+    font-weight: 600;
+    color: var(--white);
+    font-size: .95rem;
+    margin-bottom: 4px;
+  }
+  .timeline-content p {
+    font-size: .83rem;
+    color: var(--muted);
+    line-height: 1.55;
+  }
+  .timeline-step {
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    color: var(--gold);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    display: block;
+    margin-bottom: 4px;
+  }
+
+  /* ── Decision cards (3.x) ───────────────────────── */
+  .decision-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 14px;
+    margin-top: 20px;
+  }
+  .decision-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: var(--radius);
+    padding: 20px;
+    position: relative;
+    overflow: hidden;
+    transition: all .25s ease;
+  }
+  .decision-card::after {
+    content: attr(data-num);
+    position: absolute;
+    bottom: -10px; right: 10px;
+    font-family: var(--font-disp);
+    font-size: 72px;
+    font-weight: 900;
+    color: rgba(255,255,255,0.03);
+    line-height: 1;
+    pointer-events: none;
+  }
+  .decision-card:hover {
+    background: rgba(255,255,255,0.05);
+    border-color: rgba(158,216,48,0.2);
+    transform: translateY(-2px);
+  }
+  .dc-top { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .dc-icon {
+    width: 36px; height: 36px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+    flex-shrink: 0;
+  }
+  .decision-card h4 {
+    font-weight: 600;
+    font-size: .92rem;
+    color: var(--white);
+    line-height: 1.3;
+  }
+  .decision-card .insight {
+    font-size: .8rem;
+    color: rgba(253,250,243,0.55);
+    line-height: 1.6;
+    margin-top: 6px;
+  }
+  .decision-card .tip {
+    display: flex; align-items: flex-start; gap: 6px;
+    margin-top: 10px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 6px;
+    padding: 8px 10px;
+    font-size: .76rem;
+    color: var(--gold-lt);
+    line-height: 1.5;
+  }
+  .decision-card .tip::before { content: '→'; flex-shrink: 0; }
+  .dc-refs {
+    margin-top: 10px;
+    font-size: .7rem;
+    font-family: var(--font-mono);
+    color: #5E8A65;
+    line-height: 1.5;
+  }
+
+  /* ── Reflection cards ───────────────────────────── */
+  .questions-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 20px;
+  }
+  .question-item {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-left: 3px solid var(--q-color, var(--gold));
+    border-radius: 0 var(--radius) var(--radius) 0;
+    padding: 16px 20px;
+    transition: all .2s ease;
+    cursor: default;
+  }
+  .question-item:hover {
+    background: rgba(255,255,255,0.05);
+    transform: translateX(4px);
+  }
+  .question-item p {
+    font-size: .9rem;
+    color: rgba(253,250,243,0.85);
+    line-height: 1.65;
+    font-weight: 300;
+  }
+  .question-item strong { color: var(--white); }
+
+  /* ── Tools cards ────────────────────────────────── */
+  .tools-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 14px;
+    margin-top: 20px;
+  }
+  .tool-card {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: var(--radius);
+    padding: 20px;
+    text-align: center;
+    transition: all .25s ease;
+  }
+  .tool-card:hover {
+    background: rgba(255,255,255,0.06);
+    border-color: rgba(125,194,66,0.2);
+    transform: translateY(-3px);
+    box-shadow: 0 16px 32px rgba(0,0,0,0.3);
+  }
+  .tool-card .tool-icon { font-size: 36px; margin-bottom: 10px; }
+  .tool-card h4 {
+    font-weight: 600;
+    font-size: .88rem;
+    color: var(--white);
+    margin-bottom: 6px;
+  }
+  .tool-card p {
+    font-size: .78rem;
+    color: var(--muted);
+    line-height: 1.5;
+  }
+  .tool-card .formula {
+    margin-top: 10px;
+    background: rgba(0,0,0,0.5);
+    border-radius: 6px;
+    padding: 8px;
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    color: #9ED830;
+    line-height: 1.5;
+  }
+
+  /* ── Informe final ──────────────────────────────── */
+  .report-steps {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 14px;
+    margin-top: 20px;
+  }
+  .report-step {
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: var(--radius);
+    padding: 20px 18px;
+    text-align: center;
+    transition: all .25s ease;
+  }
+  .report-step:hover { background: rgba(255,255,255,0.06); transform: translateY(-2px); }
+  .report-step .step-n {
+    font-family: var(--font-disp);
+    font-size: 2rem;
+    font-weight: 900;
+    color: #9ED830;
+    opacity: .4;
+    display: block;
+    line-height: 1;
+    margin-bottom: 8px;
+  }
+  .report-step h4 {
+    font-weight: 600; font-size: .88rem; color: var(--white); margin-bottom: 6px;
+  }
+  .report-step p { font-size: .78rem; color: var(--muted); line-height: 1.5; }
+
+  /* ── Bibliography ───────────────────────────────── */
+  .bib-filter {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    margin-bottom: 20px;
+  }
+  .bib-btn {
+    padding: 6px 16px;
+    border-radius: 100px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: transparent;
+    color: rgba(253,250,243,0.65);
+    font-size: .8rem;
+    font-family: var(--font-body);
+    cursor: pointer;
+    transition: all .2s;
+  }
+  .bib-btn:hover, .bib-btn.active {
+    background: #9ED830;
+    border-color: #9ED830;
+    color: #0B0E14;
+    font-weight: 600;
+  }
+  .bib-list { display: flex; flex-direction: column; gap: 8px; }
+  .bib-item {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-size: .82rem;
+    color: rgba(255,255,255,0.6);
+    line-height: 1.6;
+    transition: all .2s;
+  }
+  .bib-item:hover { background: rgba(255,255,255,0.05); color: var(--cream); }
+  .bib-item .bib-author { color: #9ED830; font-weight: 500; }
+  .bib-item .bib-cat {
+    display: inline-block;
+    font-family: var(--font-mono);
+    font-size: .65rem;
+    color: var(--muted);
+    background: rgba(255,255,255,0.05);
+    padding: 2px 7px;
+    border-radius: 4px;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .bib-item.hidden { display: none; }
+
+  /* ── Back to top ─────────────────────────────────── */
+  .back-top {
+    position: fixed;
+    bottom: 30px; right: 30px;
+    width: 44px; height: 44px;
+    background: #9ED830;
+    color: #0B0E14;
+    border: none;
+    border-radius: 50%;
+    font-size: 20px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 20px rgba(158,216,48,0.35);
+    opacity: 0;
+    pointer-events: none;
+    transition: all .3s ease;
+    z-index: 500;
+  }
+  .back-top.show { opacity: 1; pointer-events: auto; }
+  .back-top:hover { transform: translateY(-3px); box-shadow: 0 8px 28px rgba(158,216,48,0.45); }
+
+  /* ── Divider ─────────────────────────────────────── */
+  .divider {
+    margin: 40px 60px 0;
+    border: none;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+
+  /* ── Color accent map for decision cards ─────────── */
+  .dc-blue  { background: rgba(255,255,255,0.05); }
+  .dc-green { background: rgba(158,216,48,0.08); }
+  .dc-gold  { background: rgba(125,194,66,0.12); }
+  .dc-purple{ background: rgba(255,255,255,0.05); }
+  .dc-red   { background: rgba(229,57,53,0.1);   }
+
+  /* ── Responsive ─────────────────────────────────── */
+  @media (max-width: 900px) {
+    .sidebar { transform: translateX(-100%); }
+    .sidebar.open { transform: translateX(0); }
+    .main { margin-left: 0; max-width: 100%; }
+    .menu-toggle { display: flex; }
+    .hero, .section { padding-left: 24px; padding-right: 24px; }
+    .hero::before { display: none; }
+    .divider { margin-left: 24px; margin-right: 24px; }
+  }
+
+  /* ── Annexes ────────────────────────────────────── */
+  .annex-hero {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: var(--radius);
+    padding: 28px 32px;
+    margin-bottom: 36px;
+  }
+  .annex-hero h3 {
+    font-family: var(--font-disp);
+    font-size: 1.4rem;
+    font-weight: 900;
+    color: #9ED830;
+    margin-bottom: 8px;
+  }
+  .annex-hero p { font-size: .88rem; color: var(--muted); line-height: 1.6; }
+  .annex-index-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 10px;
+    margin-top: 20px;
+  }
+  .annex-index-item {
+    background: rgba(255,255,255,0.02);
+    border: 1px solid rgba(255,255,255,0.06);
+    border-radius: 8px;
+    padding: 12px 14px;
+    text-decoration: none;
+    transition: all .2s;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .annex-index-item:hover {
+    background: rgba(158,216,48,0.06);
+    border-color: rgba(158,216,48,0.3);
+    transform: translateY(-1px);
+  }
+  .anx-letter {
+    font-family: var(--font-mono);
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #9ED830;
+    flex-shrink: 0;
+    line-height: 1;
+    padding-top: 2px;
+  }
+  .anx-title { font-size: .78rem; color: rgba(253,250,243,0.75); line-height: 1.4; }
+
+  /* Annex sub-section */
+  .annex-section {
+    margin-top: 40px;
+    padding-top: 32px;
+    border-top: 1px solid rgba(255,255,255,0.05);
+  }
+  .annex-section-header {
+    display: flex; align-items: flex-start; gap: 16px;
+    margin-bottom: 24px;
+  }
+  .anx-badge {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    font-weight: 700;
+    color: #0B0E14;
+    background: #9ED830;
+    width: 38px; height: 38px;
+    border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .annex-section-header h4 {
+    font-family: var(--font-disp);
+    font-size: 1.35rem;
+    font-weight: 700;
+    color: var(--white);
+    line-height: 1.2;
+  }
+  .annex-section-header p {
+    font-size: .82rem;
+    color: var(--muted);
+    margin-top: 3px;
+    font-weight: 300;
+  }
+
+  /* Annex tables — slightly more compact */
+  .anx-table-wrap { overflow-x: auto; margin: 16px 0; border-radius: 8px; border: 1px solid rgba(255,255,255,0.06); }
+  .anx-table { width: 100%; border-collapse: collapse; font-size: .81rem; }
+  .anx-table thead { background: rgba(158,216,48,0.07); }
+  .anx-table thead th {
+    padding: 11px 14px;
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: .7rem;
+    letter-spacing: 1.2px;
+    text-transform: uppercase;
+    color: #9ED830;
+    font-weight: 500;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    white-space: nowrap;
+  }
+  .anx-table tbody tr { border-bottom: 1px solid rgba(255,255,255,0.04); transition: background .15s; }
+  .anx-table tbody tr:last-child { border-bottom: none; }
+  .anx-table tbody tr:hover { background: rgba(158,216,48,0.04); }
+  .anx-table tbody td {
+    padding: 10px 14px;
+    color: rgba(253,250,243,0.78);
+    vertical-align: top;
+    line-height: 1.5;
+  }
+  .anx-table tbody td:first-child { color: var(--white); font-weight: 500; }
+  .anx-table .val-pos { color: #4CAF50; font-weight: 600; }
+  .anx-table .val-neg { color: #EF5350; font-weight: 600; }
+  .anx-table .val-neu { color: var(--muted); }
+  .anx-table .val-gold { color: #9ED830; font-weight: 600; }
+  .anx-table .center { text-align: center; }
+  .anx-table .mono { font-family: var(--font-mono); font-size: .78rem; }
+
+  /* Formula box */
+  .formula-box {
+    background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-left: 3px solid #9ED830;
+    border-radius: 0 8px 8px 0;
+    padding: 14px 18px;
+    margin: 14px 0;
+    font-family: var(--font-mono);
+    font-size: .83rem;
+    color: #C0ED60;
+    line-height: 1.7;
+  }
+  .formula-box .f-label {
+    font-size: .68rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    display: block;
+    margin-bottom: 6px;
+  }
+
+  /* Note box */
+  .note-box {
+    background: rgba(255,255,255,0.025);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 14px 0;
+    font-size: .82rem;
+    color: rgba(253,250,243,0.75);
+    line-height: 1.6;
+  }
+  .note-box .note-icon { margin-right: 6px; }
+  .note-box strong { color: #9ED830; }
+
+  /* Step badge */
+  .step-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(158,216,48,0.08);
+    border: 1px solid rgba(158,216,48,0.2);
+    border-radius: 100px;
+    padding: 5px 14px;
+    font-family: var(--font-mono);
+    font-size: .73rem;
+    color: #9ED830;
+    letter-spacing: 1px;
+    margin: 18px 0 8px;
+    display: block;
+    width: fit-content;
+  }
+
+  /* State badges */
+  .state-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 10px; border-radius: 100px;
+    font-size: .73rem; font-weight: 600;
+    white-space: nowrap;
+  }
+  .state-pending  { background: rgba(120,120,120,0.2); color: #aaa; }
+  .state-open     { background: rgba(46,139,87,0.2);   color: #4CAF50; }
+  .state-closed   { background: rgba(230,126,34,0.2);  color: #F39C12; }
+  .state-presim   { background: rgba(58,124,165,0.2);  color: #5DADE2; }
+  .state-done     { background: rgba(46,139,87,0.15);  color: #58D68D; }
+
+  /* Annex flow diagram */
+  .state-flow {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
+    margin: 16px 0;
+    padding: 16px 20px;
+    background: rgba(0,0,0,0.2);
+    border-radius: 8px;
+  }
+  .state-flow .arrow { color: var(--muted); font-size: 1.1rem; }
+
+
+  /* ── Sidebar logo with image ─────────────────── */
+  .logo-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .sidebar-inst-logo {
+    width: 56px;
+    height: 56px;
+    object-fit: contain;
+    flex-shrink: 0;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 5px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .logo-top .sim-tag {
+    margin-bottom: 0;
+  }
+  .sidebar-prof {
+    color: #9ED830;
+    font-size: .72rem;
+    font-style: italic;
+    display: block;
+    margin-top: 4px;
+  }
+
+  /* ── Hero watermark update ───────────────────── */
+  /* ── Animations ─────────────────────────────────── */
+  @keyframes fadeSlide {
+    from { opacity: 0; transform: translateY(16px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .hero { animation: fadeSlide .7s ease both; }
+  .progress-bar-deco { animation: fadeSlide .4s .1s ease both; }
+
+  /* ── Overlay (mobile) ─────────────────────────── */
+  .overlay {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(10,22,40,0.7);
+    z-index: 90;
+    backdrop-filter: blur(2px);
+  }
+  .overlay.show { display: block; }
+
+  /* ── Fase 0 — Sección 00 ───────────────────────── */
+  .content-block { margin-top: 28px; }
+  .content-block h4 {
+    font-family: var(--font-disp);
+    font-size: 1.1rem;
+    color: var(--white);
+    margin-bottom: 10px;
+  }
+  .content-block p {
+    color: rgba(240,244,248,0.85);
+    margin-bottom: 12px;
+  }
+  .content-block ul, .content-block ol {
+    padding-left: 20px;
+    color: rgba(240,244,248,0.85);
+    line-height: 1.8;
+  }
+  .content-block li { margin-bottom: 6px; }
+  .alert {
+    padding: 14px 18px;
+    border-radius: var(--radius);
+    margin: 16px 0;
+    font-size: .92rem;
+    line-height: 1.6;
+  }
+  .alert-warning {
+    background: rgba(255,180,0,0.08);
+    border: 1px solid rgba(255,180,0,0.3);
+    color: rgba(255,220,100,0.95);
+  }
+  .alert-info {
+    background: rgba(158,216,48,0.07);
+    border: 1px solid rgba(158,216,48,0.25);
+    color: rgba(192,237,96,0.95);
+  }
+</style>
+</head>
+<body>
+
+<!-- Mobile menu toggle -->
+<button class="menu-toggle" id="menuToggle" aria-label="Menú">☰</button>
+<div class="overlay" id="overlay"></div>
+
+<div class="layout">
+
+  <!-- ── Sidebar ── -->
+  <nav class="sidebar" id="sidebar">
+    <div class="sidebar-logo">
+      <div class="logo-top">
+        <img src="ingcomercial.png" alt="Ingeniería Comercial UAGRM" class="sidebar-inst-logo" />
+        <span class="sim-tag">Manual · SimNeg UAGRM</span>
+      </div>
+      <h1>Sim<span>Neg</span></h1>
+      <p class="sidebar-subtitle">
+        Simulador de Estrategia Comercial<br>
+        UAGRM · FCEE – Ing. Comercial<br>
+        <span class="sidebar-prof">Prof. Jhonny David Atila-Lijerón</span>
+      </p>
+    </div>
+
+    <div class="sidebar-nav">
+      <p class="nav-section-label">Contenido</p>
+      <a class="nav-item active" href="#sec-acceso" onclick="closeMenu()">
+        <span class="nav-icon">🔑</span> Acceso y Roles
+        <span class="nav-num">00</span>
+      </a>
+      <a class="nav-item" href="#sec-advertencias" onclick="closeMenu()">
+        <span class="nav-icon">⚠️</span> Antes de Empezar
+        <span class="nav-num">01</span>
+      </a>
+      <a class="nav-item" href="#sec-crear-sim" onclick="closeMenu()">
+        <span class="nav-icon">🆕</span> Crear una Simulación
+        <span class="nav-num">02</span>
+      </a>
+      <a class="nav-item" href="#sec-crear-industria" onclick="closeMenu()">
+        <span class="nav-icon">🔧</span> Crear una Industria
+        <span class="nav-num">🔧</span>
+      </a>
+      <a class="nav-item" href="#sec-fase0" onclick="closeMenu()">
+        <span class="nav-icon">🏗️</span> Configurar Fase 0
+        <span class="nav-num">03</span>
+      </a>
+      <a class="nav-item" href="#sec-modulos" onclick="closeMenu()">
+        <span class="nav-icon">🧩</span> Módulos Opcionales
+        <span class="nav-num">04</span>
+      </a>
+      <a class="nav-item" href="#sec-parametros" onclick="closeMenu()">
+        <span class="nav-icon">💰</span> Parámetros Financieros y de Mercado
+        <span class="nav-num">05</span>
+      </a>
+      <a class="nav-item" href="#sec-segmentos" onclick="closeMenu()">
+        <span class="nav-icon">🎯</span> Segmentos, Afinidad y Canales
+        <span class="nav-num">06</span>
+      </a>
+      <a class="nav-item" href="#sec-shocks" onclick="closeMenu()">
+        <span class="nav-icon">⚡</span> Shocks de Mercado
+        <span class="nav-num">07</span>
+      </a>
+      <a class="nav-item" href="#sec-bots" onclick="closeMenu()">
+        <span class="nav-icon">🤖</span> Competidores Fijos (Bots)
+        <span class="nav-num">08</span>
+      </a>
+      <a class="nav-item" href="#sec-comp-externa" onclick="closeMenu()">
+        <span class="nav-icon">🌐</span> Competencia Externa (panel)
+        <span class="nav-num">09</span>
+      </a>
+      <a class="nav-item" href="#sec-ciclo-ronda" onclick="closeMenu()">
+        <span class="nav-icon">🔄</span> Ciclo de una Ronda
+        <span class="nav-num">10</span>
+      </a>
+      <a class="nav-item" href="#sec-recalcular" onclick="closeMenu()">
+        <span class="nav-icon">🔁</span> Recalcular: Ronda vs. Balance
+        <span class="nav-num">11</span>
+      </a>
+      <a class="nav-item" href="#sec-usuarios" onclick="closeMenu()">
+        <span class="nav-icon">👥</span> Gestión de Usuarios y Equipos
+        <span class="nav-num">12</span>
+      </a>
+      <a class="nav-item" href="#sec-resultados" onclick="closeMenu()">
+        <span class="nav-icon">📈</span> Resultados, Reportes y Ranking
+        <span class="nav-num">13</span>
+      </a>
+      <a class="nav-item" href="#sec-checklists" onclick="closeMenu()">
+        <span class="nav-icon">✅</span> Checklists Operativos
+        <span class="nav-num">14</span>
+      </a>
+      <a class="nav-item" href="#sec-backups" onclick="closeMenu()">
+        <span class="nav-icon">💾</span> Backups y Restauración
+        <span class="nav-num">15</span>
+      </a>
+      <a class="nav-item" href="#sec-troubleshooting" onclick="closeMenu()">
+        <span class="nav-icon">🔧</span> Troubleshooting
+        <span class="nav-num">16</span>
+      </a>
+      <p class="nav-section-label" style="margin-top:8px;">Anexos — Referencia</p>
+      <a class="nav-item" href="#anx-a" onclick="closeMenu()">
+        <span class="nav-icon">📖</span> A · Glosario de Roles y Estados
+        <span class="nav-num">A</span>
+      </a>
+    </div>
+
+    <div class="sidebar-footer">
+      <p><strong>SimNeg UAGRM v2.0</strong> · 2026<br>Manual del Profesor<br>20 trimestres · Calzados Especializados<br><span style='color:var(--gold);font-size:.7rem;'>UAGRM · Ing. Comercial · COM540</span></p>
+    </div>
+  </nav>
+
+  <!-- ── Main ── -->
+  <main class="main" id="mainContent">
+    <div class="progress-bar-deco"></div>
+
+    <!-- HERO -->
+    <div class="hero">
+      <span class="hero-tag">Manual del Profesor</span>
+      <h2>Tu guía para administrar<br><em>una simulación completa</em></h2>
+      <p class="hero-desc">
+        Esta referencia cubre desde la creación de una simulación en SimNego v3.2 hasta el cierre
+        de la última ronda — configuración, ciclo operativo, y los checklists necesarios para
+        administrar una clase o un examen sin sorpresas.
+      </p>
+      <div class="hero-badges">
+        <span class="badge"><span>🎮</span> Gestión de simulaciones</span>
+        <span class="badge"><span>🔄</span> Ciclo de rondas R1–R20</span>
+        <span class="badge"><span>🧩</span> 7 módulos configurables</span>
+        <span class="badge"><span>💾</span> Backups y restauración</span>
+      </div>
+    </div>
+
+    <!-- SECCIÓN 00: ACCESO Y ROLES -->
+    <section class="section" id="sec-acceso">
+      <div class="section-header">
+        <div class="section-num">00</div>
+        <div class="section-title-block">
+          <h3>Acceso y Roles</h3>
+          <p>Login como profesor/admin/superadmin, y qué puede hacer cada rol</p>
+        </div>
+      </div>
+      <p class="prose">
+        El acceso al panel de administración usa el <strong>mismo formulario de login</strong> que los equipos —
+        no hay una pantalla separada para profesores. El sistema distingue el rol por lo que escribís en el campo
+        de identificador: nombre de equipo, correo electrónico (profesor) o ID de admin. El servidor responde con
+        tu rol real y te lleva al panel correspondiente.
+      </p>
+
+      <div class="anx-table-wrap" style="margin-top:16px;">
+        <table class="anx-table">
+          <thead>
+            <tr><th>Rol</th><th>Qué ve</th><th>Qué puede hacer</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Profesor</strong></td>
+              <td>Solo las simulaciones que el superadmin le asignó — ninguna otra existe para su sesión.</td>
+              <td>Ver parámetros, segmentos, afinidad y competencia externa. Revisar equipos, rondas y resultados. No puede crear simulaciones ni guardar cambios en ninguna de esas áreas.</td>
+            </tr>
+            <tr>
+              <td><strong>Superadmin</strong></td>
+              <td>Todas las simulaciones de todos los profesores, sin excepción.</td>
+              <td>Todo lo anterior, más crear simulaciones, guardar parámetros/segmentos/afinidad/competencia, y asignar o reasignar una simulación a cualquier profesor.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="prose" style="margin-top:16px;">
+        Una cuenta de profesor <strong>no se crea directamente</strong> — el superadmin envía una invitación
+        (Panel → Profesores) con el correo del docente. El link de invitación es válido por <strong>7 días</strong>
+        y no se envía por correo automáticamente: el sistema no tiene un servicio de email configurado, así que el
+        superadmin comparte el link manualmente (WhatsApp, email personal, etc.). Al abrir el link, el profesor
+        define su nombre y contraseña, y queda logueado de inmediato.
+      </p>
+
+      <div class="note-box"><span class="note-icon">📌</span> Si entrás como profesor y no tenés ninguna simulación
+      asignada todavía, vas a ver el mensaje <em>"No hay simulaciones activas. Crea una nueva para comenzar."</em> —
+      ese mensaje es genérico y <strong>no aplica a tu rol</strong>: el botón "+ Nueva Simulación" está deshabilitado
+      para vos a propósito. Pedile al superadmin que te asigne una simulación existente; no hay nada que puedas
+      hacer desde tu cuenta para generar una.</div>
+
+      <p class="prose" style="margin-top:16px;">
+        Con una simulación asignada, esto es lo que podés ver y editar en cada área:
+      </p>
+
+      <div class="anx-table-wrap">
+        <table class="anx-table">
+          <thead>
+            <tr><th>Área</th><th>Ver</th><th>Editar</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Parámetros financieros y de mercado</td><td class="center val-pos">✅</td><td class="center val-neg">❌</td></tr>
+            <tr><td>Shocks de mercado</td><td class="center val-pos">✅</td><td class="center val-neg">❌</td></tr>
+            <tr><td>Segmentos</td><td class="center val-pos">✅</td><td class="center val-neg">❌</td></tr>
+            <tr><td>Matriz de afinidad</td><td class="center val-pos">✅</td><td class="center val-neg">❌</td></tr>
+            <tr><td>Competencia externa</td><td class="center val-pos">✅</td><td class="center val-neg">❌</td></tr>
+            <tr><td>Equipos, rondas y resultados</td><td class="center val-pos">✅</td><td class="center val-pos">✅</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="note-box"><span class="note-icon">📌</span> <strong>Competencia externa</strong> se puede ver sin
+      poder editar, pero eso importa menos de lo que parece: ese panel <strong>no tiene ningún efecto real en el
+      motor de simulación</strong> — es contexto narrativo, no un input del cálculo (mismo hallazgo que el Anexo J
+      del Manual del Estudiante).</div>
+
+      <p class="prose" style="margin-top:16px;">
+        Al seleccionar una simulación (Panel → Simulaciones), el sistema solo te deja elegir entre las que te
+        pertenecen — cualquier otro ID, aunque exista en el sistema, te va a devolver "no encontrada o no autorizada".
+        No hay forma de "espiar" ni de seleccionar por error la simulación de otro profesor.
+      </p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 01: ADVERTENCIAS CLAVE -->
+    <section class="section" id="sec-advertencias">
+      <div class="section-header">
+        <div class="section-num">01</div>
+        <div class="section-title-block">
+          <h3>Antes de Empezar — Advertencias Clave</h3>
+          <p>Lo que más puede salir mal, y cómo evitarlo</p>
+        </div>
+      </div>
+      <div class="cards-grid" style="grid-template-columns:1fr;margin-top:8px">
+        <div class="card" style="--card-accent:#E53935">
+          <span class="card-icon">🔒</span>
+          <h4>1. Parámetros, segmentos, afinidad y competencia: bloqueo total para profesor</h4>
+          <p>Si sos profesor, el sistema <strong>no te deja guardar cambios en estas 4 áreas bajo ninguna
+          circunstancia</strong> — no depende de en qué ronda esté la simulación, es un bloqueo permanente. Si sos
+          superadmin, podés editarlas siempre, con una sola excepción: los <strong>módulos opcionales</strong>
+          (innovación, fuerza de ventas, etc.) quedan fijos apenas se simula la Ronda 1, para no cambiar las reglas
+          del juego a mitad de partida.</p>
+        </div>
+        <div class="card" style="--card-accent:#E53935">
+          <span class="card-icon">⚠️</span>
+          <h4>2. No toques una simulación real en curso sin autorización</h4>
+          <p>Las simulaciones de prueba (demos, pilotos, pruebas técnicas) se pueden crear y borrar libremente. Una
+          simulación <strong>real</strong> — con equipos de estudiantes reales tomando decisiones — es otra cosa:
+          nunca la edites, reinicies ni recalcules sin coordinar con quien la administra. <em>Ejemplo ilustrativo:</em>
+          en el historial de este proyecto, <code>sim_mqmb4bvo</code> fue documentada explícitamente como
+          "activa/intocable" — así se ve una simulación real en la práctica, no un ID que debas buscar ni tocar vos.</p>
+        </div>
+        <div class="card" style="--card-accent:#FF9800">
+          <span class="card-icon">🆕</span>
+          <h4>3. Diferenciá una simulación nueva de una ya iniciada</h4>
+          <p>Una simulación "nueva" es la que todavía no simuló ninguna ronda (Ronda 1, estado pendiente). Apenas se
+          simula la primera ronda, deja de ser nueva — varios cambios que son seguros antes de empezar (como
+          activar/desactivar módulos opcionales) dejan de estar disponibles después, precisamente para proteger
+          la partida en curso.</p>
+        </div>
+        <div class="card" style="--card-accent:#FF9800">
+          <span class="card-icon">📊</span>
+          <h4>4. Los parámetros globales sí afectan los resultados reales</h4>
+          <p>No son solo valores de referencia: tasas, costos fijos, plazos y factores de shock entran directamente
+          en el cálculo de cada ronda. Cambiar un parámetro cambia lo que los equipos ven en sus estados financieros
+          — tratalo con el mismo cuidado que una decisión de diseño del curso, no como un ajuste cosmético.</p>
+        </div>
+        <div class="card" style="--card-accent:#9ED830">
+          <span class="card-icon">💾</span>
+          <h4>5. Toda restauración exige respaldo previo</h4>
+          <p>El sistema no guarda backups automáticos en el servidor — la restauración depende de que vos ya
+          tengas el archivo de respaldo descargado. Sin ese archivo en la mano, la función de restaurar
+          literalmente no tiene con qué operar. Hacé el backup <em>antes</em> de cualquier cambio grande, no
+          después de que algo salga mal.</p>
+        </div>
+      </div>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 02: CREAR UNA SIMULACIÓN -->
+    <section class="section" id="sec-crear-sim">
+      <div class="section-header">
+        <div class="section-num">02</div>
+        <div class="section-title-block">
+          <h3>Crear una Simulación Nueva</h3>
+          <p>Selección de industria, configuración general y motor contable</p>
+        </div>
+      </div>
+      <p class="prose">
+        Solo el <strong>superadmin</strong> puede crear una simulación —
+        el botón "+ Nueva Simulación" está deshabilitado para el rol
+        profesor (ver Sección 00).
+      </p>
+
+      <div class="anx-table-wrap" style="margin-top:16px;">
+        <table class="anx-table">
+          <thead><tr><th>Campo</th><th>¿Obligatorio?</th><th>Qué hace</th></tr></thead>
+          <tbody>
+            <tr><td>Nombre</td><td class="center">Sí</td><td>Identifica la simulación en el panel.</td></tr>
+            <tr><td>Descripción</td><td class="center">No</td><td>Solo texto de referencia.</td></tr>
+            <tr><td>Rondas totales</td><td class="center">No (default: 20)</td><td>Cuántos trimestres va a durar.</td></tr>
+            <tr><td>Copiar de otra simulación</td><td class="center">No</td><td>Ver más abajo.</td></tr>
+            <tr><td>Industria</td><td class="center">Solo si no copiás</td><td>Hoy hay una única plantilla disponible: Calzados. Ver la sección siguiente para agregar otra.</td></tr>
+            <tr><td>Modo de inicio</td><td class="center">No (default: Fase 0)</td><td>Ver más abajo.</td></tr>
+            <tr><td>Asignar a</td><td class="center">No (default: para mí)</td><td>Le entrega la simulación directamente a un profesor al crearla.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Copiar de otra simulación:</strong> la nueva hereda
+        parámetros, productos, canales, segmentos, matriz de afinidad y
+        competencia externa de la simulación origen — no copia equipos,
+        rondas jugadas ni resultados. Siempre empieza desde cero en el
+        juego en sí.
+      </p>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Modo de inicio</strong> — hay 2 comportamientos reales:
+        <strong>Fase 0</strong> (el default): cada equipo arranca con el
+        capital y los gastos fijos que vos le carguen específicamente —
+        ver Sección 03. <strong>Homogéneo</strong>: todos los equipos
+        arrancan con exactamente los mismos valores, tomados de los
+        parámetros globales.
+      </p>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Asignar la simulación:</strong> si dejás "Asignar a" en
+        "Para mí", la asignás después con el mecanismo de reasignación
+        (ver Sección 12). Si elegís un profesor directamente acá, la
+        simulación nace ya asignada a él.
+      </p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 02B: CREAR UNA INDUSTRIA NUEVA (avanzado, opcional) -->
+    <section class="section" id="sec-crear-industria">
+      <div class="section-header">
+        <div class="section-num">🔧</div>
+        <div class="section-title-block">
+          <h3>Crear una Industria Nueva</h3>
+          <p>Agregar una plantilla de industria distinta a Calzados (avanzado, opcional)</p>
+        </div>
+      </div>
+      <p class="prose">
+        <strong>Esto es un procedimiento técnico, no una tarea de uso
+        diario.</strong> Crear una industria significa escribir un
+        archivo JSON nuevo en el servidor — no hay ninguna pantalla del
+        panel para hacerlo. Si no te sentís cómodo editando JSON a mano,
+        pedile ayuda a quien mantiene técnicamente el simulador antes de
+        intentarlo con una simulación real.
+      </p>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Las 6 partes obligatorias</strong> — el sistema exige,
+        sin excepción, que el archivo tenga estas 6 claves: si falta
+        alguna, ni siquiera vas a poder crear una simulación con esa
+        industria (vas a ver un error claro: "Plantilla incompleta.
+        Faltan: ..."):
+      </p>
+      <ul style="margin:8px 0 0 18px;padding:0;font-size:.9rem;line-height:1.7">
+        <li><code>params</code> — todos los valores numéricos del motor (tasas, costos, factores)</li>
+        <li><code>tiposProducto</code> — los productos disponibles, cada uno con su costo base</li>
+        <li><code>canales</code> — los canales de venta disponibles</li>
+        <li><code>segmentos</code> — los segmentos de mercado (mínimo 1)</li>
+        <li><code>afinidadMatrix</code> — qué tan bien encaja cada producto con cada segmento</li>
+      </ul>
+      <p class="prose" style="margin-top:8px">
+        Dos partes más son opcionales pero recomendadas: <code>proveedores</code>
+        (si no las incluís, no habrá proveedores de materia prima
+        disponibles) y <code>meta</code> (información descriptiva, sin
+        efecto en el cálculo).
+      </p>
+
+      <div class="note-box" style="margin-top:16px"><span class="note-icon">📌</span>
+        <strong>El peligro real: los errores silenciosos.</strong> El
+        sistema NO valida el contenido interno de cada parte — solo
+        confirma que las 6 claves existan. Si a <code>params</code> le
+        falta alguno de sus ~66 valores, el sistema no te avisa — usa un
+        valor genérico de respaldo, calibrado para la industria de
+        Calzados, que puede no tener ningún sentido para la tuya. Si a un
+        producto le falta su <code>costoBase</code> (por un typo), el
+        error se propaga silenciosamente y recién lo vas a notar mucho más
+        adelante, cuando algún resultado financiero muestre un valor sin
+        sentido.
+      </div>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Recomendación práctica:</strong> la forma más segura de
+        crear una industria nueva es copiar un archivo existente
+        (<code>industrias/Calzados_COM540_1_2026_V2.json</code>) y
+        modificarlo campo por campo, en vez de escribir uno desde cero.
+      </p>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Cómo se activa:</strong> el archivo va en la carpeta
+        <code>industrias/</code> del servidor. En el entorno de desarrollo
+        actual, aparece automáticamente en el selector apenas lo guardás
+        — no hace falta reiniciar nada. En un entorno de producción, esto
+        puede cambiar según cómo esté configurado el despliegue en ese
+        momento; consultá con quien administre el servidor si no estás
+        seguro. Una vez agregado, si querés ocultarlo del selector sin
+        borrarlo, agregá <code>"estado": {"visible": false}</code> o
+        <code>"deprecated": true</code> al archivo.
+      </p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 03: CONFIGURAR FASE 0 -->
+    <section class="section" id="sec-fase0">
+      <div class="section-header">
+        <div class="section-num">03</div>
+        <div class="section-title-block">
+          <h3>Configurar Fase 0</h3>
+          <p>Capital inicial, niveles de planta y asignación de equipos</p>
+        </div>
+      </div>
+      <p class="prose">
+        Fase 0 es la etapa previa a la Ronda 1: es donde cada equipo
+        arranca con una situación financiera concreta. A diferencia de
+        Parámetros/Segmentos/Afinidad/Competencia, esta pantalla
+        <strong>no está restringida por rol</strong> — un profesor también
+        puede usarla.
+      </p>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Lo que cargás vos (el marco financiero)</strong> — por
+        cada equipo, antes de que empiece a jugar:
+      </p>
+      <ul style="margin:8px 0 0 18px;padding:0;font-size:.9rem;line-height:1.7">
+        <li><strong>Capital:</strong> caja inicial y capital de inversión (individual, o "masivo" para todos a la vez).</li>
+        <li><strong>Gastos fijos:</strong> administrativo, de planta, sueldos administrativos — los 3 son obligatorios (podés poner 0, pero no dejarlos vacíos).</li>
+        <li><strong>Créditos previos a la Ronda 1:</strong> operativo y de inversión, opcionales.</li>
+      </ul>
+
+      <p class="prose" style="margin-top:16px">
+        <strong>Lo que carga el equipo:</strong> con el marco financiero
+        definido, cada equipo completa su parte — segmento, producto,
+        nivel de planta, y activos complementarios (vehículo, muebles,
+        cómputo, patentes) — siempre dentro del capital que le asignaste.
+      </p>
+
+      <p class="prose" style="margin-top:16px"><strong>El ciclo de Fase 0:</strong></p>
+      <ol style="margin:8px 0 0 18px;padding:0;font-size:.9rem;line-height:1.7">
+        <li><strong>Habilitar:</strong> creás el registro del equipo (queda en "borrador").</li>
+        <li>El equipo completa y <strong>envía</strong> su Fase 0.</li>
+        <li><strong>Activar:</strong> marcás la Fase 0 como activa para toda la simulación.</li>
+        <li><strong>Cerrar:</strong> cierra Fase 0 para todos — el sistema no te deja si falta algún equipo por enviar, o si a alguno le falta algún gasto fijo. Si la simulación usa partida doble, cerrar Fase 0 también genera los asientos de constitución.</li>
+      </ol>
+      <p class="prose" style="margin-top:12px">
+        Una vez cerrada, no hay vuelta atrás desde estas pantallas.
+      </p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 04: MÓDULOS OPCIONALES -->
+    <section class="section" id="sec-modulos">
+      <div class="section-header">
+        <div class="section-num">04</div>
+        <div class="section-title-block">
+          <h3>Módulos Opcionales</h3>
+          <p>Los 7 módulos configurables y su efecto real al desactivarlos</p>
+        </div>
+      </div>
+      <p class="prose">En la pantalla de Parámetros Financieros hay 7 interruptores, uno por cada módulo opcional del motor. Todos vienen <strong>activos por defecto</strong> — una simulación que nunca los toca se comporta exactamente igual que antes de que existiera este sistema de interruptores.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Módulo</th><th>Efecto real al desactivarlo</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Fuerza de Ventas</strong></td><td>El equipo queda con 0 vendedores, sin costo de vendedores ni de contratación/despido — la variable deja de tener efecto sobre atractivo o gasto, no solo se "congela".</td></tr>
+            <tr><td><strong>Operarios y Producción</strong></td><td>Se apaga la <em>gestión</em> (contratar/despedir), pero los operarios iniciales del equipo se mantienen: siguen existiendo como capacidad productiva, no se ponen en cero. El límite físico de planta tampoco se toca.</td></tr>
+            <tr><td><strong>Inversión en activos por ronda</strong></td><td>El equipo no puede comprar más capacidad, vehículos, muebles, cómputo ni patentes esa ronda. Lo que ya se compró en rondas anteriores sigue depreciándose con normalidad.</td></tr>
+            <tr><td><strong>Innovación</strong></td><td>El gasto e impacto de innovación sobre el costo unitario queda en 0, aunque el equipo marque la casilla de innovación en su decisión.</td></tr>
+            <tr><td><strong>Investigación de Mercado</strong></td><td>El equipo no paga el costo de la investigación aunque elija un tipo (Básica/Premium/Estratégico) en su decisión.</td></tr>
+            <tr><td><strong>Sistema Tributario</strong></td><td>Deja de calcularse IVA, IT e IUE en las fórmulas que dependen de este interruptor.</td></tr>
+            <tr><td><strong>Proveedores de Materia Prima</strong></td><td>Deja de aplicarse el techo de calidad que impone el proveedor elegido sobre la calidad declarada por el equipo.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Cuándo se pueden cambiar</h4>
+      <p class="prose">Los interruptores solo son editables <strong>antes de activar la Ronda 1</strong> (<code>currentRound === 1</code> y <code>roundState === 'pending'</code>). Una vez que la simulación avanzó más allá de ese punto, los controles se muestran deshabilitados (no ocultos) con un aviso explicando por qué — para no cambiar las reglas del juego a mitad de partida. Guardar cambios en los módulos es, además, exclusivo de superadmin (Sección 05) — el profesor los ve pero no los edita.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 05: PARÁMETROS FINANCIEROS Y DE MERCADO -->
+    <section class="section" id="sec-parametros">
+      <div class="section-header">
+        <div class="section-num">05</div>
+        <div class="section-title-block">
+          <h3>Parámetros Financieros y de Mercado</h3>
+          <p>Tasas, costos fijos y plazos configurables — vista del administrador</p>
+        </div>
+      </div>
+      <p class="prose">La pantalla de Parámetros agrupa las tasas y costos que el motor usa en todos los equipos por igual, organizados en tarjetas temáticas. Guardar cambios es <strong>exclusivo de superadmin</strong> — el profesor ve todos los valores pero el botón "Guardar Parámetros" aparece deshabilitado.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tarjeta</th><th>Qué incluye</th></tr></thead>
+          <tbody>
+            <tr><td>💳 Ventas y Cobranzas</td><td>% ventas al contado / a crédito, plazo de cobro en trimestres.</td></tr>
+            <tr><td>🏦 Financiamiento</td><td>Tasas de préstamo operativo/inversión, tasa de sobregiro, comisión de apertura, plazos de préstamo.</td></tr>
+            <tr><td>👥 Fuerza de Ventas</td><td>Vendedores iniciales, sueldo trimestral, costo de contratación/despido — valores de respaldo si Fase 0 no define uno propio por equipo.</td></tr>
+            <tr><td>👷 Operarios y Producción</td><td>Operarios iniciales, productividad base, costo trimestral, contratación/despido, factor de capacitación.</td></tr>
+            <tr><td>🏗️ Inversión en activos por ronda</td><td>Costo por unidad de ampliación de planta/maquinaria, y costo de vehículos (3 niveles), muebles, cómputo y patentes. Si algún rubro queda sin configurar, la propia pantalla avisa que los equipos verán costo Bs 0 hasta completarlo.</td></tr>
+            <tr><td>🔍 Investigación de Mercado</td><td>Costo de los 3 reportes: Básico, Premium, Estratégico.</td></tr>
+            <tr><td>💡 Innovación</td><td>Factor de innovación en Producto y en Proceso.</td></tr>
+            <tr><td>🧾 Sistema Tributario Bolivia</td><td>Tasas de IVA, IT (sobre ventas brutas) e IUE (sobre utilidad gravable), y los períodos para el pago de IUE.</td></tr>
+            <tr><td>📈 Demanda y Marca</td><td>Sensibilidad competitiva (λ Logit), sensibilidad al precio, factor de canibalización entre segmentos, tasa de decaimiento de marca.</td></tr>
+            <tr><td>🧪 Costo Base — Generales</td><td>Costo de almacenamiento por unidad, % del costo que representa cada punto de calidad, % del costo base que es materia prima.</td></tr>
+            <tr><td>🏷️ Costo Base — por Producto</td><td>Costo de producción por unidad (Bs) de cada tipo de producto de la industria — esto es lo mismo que se edita en la Sección 06 junto a Canales.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="prose">Las 6 tarjetas con un interruptor en el título (Fuerza de Ventas, Operarios y Producción, Inversión en activos, Investigación de Mercado, Innovación, Sistema Tributario) corresponden a 6 de los 7 módulos opcionales de la Sección 04 — el interruptor está junto a los parámetros que ese módulo gobierna. El séptimo módulo, Proveedores de Materia Prima, no tiene parámetros propios en esta pantalla.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 06: SEGMENTOS, AFINIDAD Y CANALES -->
+    <section class="section" id="sec-segmentos">
+      <div class="section-header">
+        <div class="section-num">06</div>
+        <div class="section-title-block">
+          <h3>Segmentos, Afinidad y Canales</h3>
+          <p>Configuración de los 6 segmentos, matriz de afinidad y canales de distribución</p>
+        </div>
+      </div>
+      <p class="prose">Estas tres pestañas del panel de administración (<strong>Segmentos</strong>, <strong>Afinidad</strong> y <strong>Canales</strong>) editan la configuración de mercado de la simulación activa. Las tres son <strong>exclusivas de superadmin</strong> — un profesor puede abrirlas y ver los valores, pero los campos y el botón de guardar aparecen deshabilitados con el aviso "Solo lectura".</p>
+
+      <h4>Segmentos</h4>
+      <p class="prose">Cada simulación tiene 6 segmentos de mercado (uno por pestaña en el editor). Por segmento se configura:</p>
+      <ul class="prose-list">
+        <li><strong>Nombre</strong> — el texto que ven los equipos en sus reportes.</li>
+        <li><strong>Demanda base (unidades)</strong> — el tamaño del segmento antes de descontar contrabando.</li>
+        <li><strong>% Contrabando (0–1)</strong> — la demanda formal real es <code>Demanda base × (1 − % Contrabando)</code>, calculada y mostrada en vivo debajo de cada panel.</li>
+        <li><strong>Índice externo</strong> — factor que alimenta el cálculo de demanda del motor.</li>
+        <li><strong>Tasa de crecimiento (0–1)</strong> — cuánto crece la demanda base de ese segmento por ronda. La "Tendencia" que se ve al lado es solo una etiqueta derivada de esta tasa (no se edita directamente).</li>
+      </ul>
+
+      <h4>Afinidad</h4>
+      <p class="prose">Es una matriz <strong>Producto × Segmento</strong>: para cada tipo de producto, qué tan bien encaja con cada uno de los 6 segmentos. Los valores van de <strong>-3 a +3</strong>:</p>
+      <ul class="prose-list">
+        <li><strong>+3</strong> ajuste perfecto, <strong>+1</strong> aceptable, <strong>0</strong> neutro, negativo mal ajuste — el color de cada celda cambia según el valor para que sea fácil detectar combinaciones fuertes o débiles de un vistazo.</li>
+      </ul>
+
+      <h4>Canales</h4>
+      <p class="prose">Por cada canal de distribución se configuran 4 factores que el motor usa al calcular ventas y costos:</p>
+      <ul class="prose-list">
+        <li><strong>Costo adicional unitario</strong> — costo extra por unidad vendida en ese canal.</li>
+        <li><strong>Comisión (%)</strong> — porcentaje que se descuenta por venta.</li>
+        <li><strong>Factor impacto vendedores</strong> — cuánto influye la dotación de vendedores del equipo en ese canal.</li>
+        <li><strong>Bono atractivo</strong> — ajuste adicional de atractivo del canal frente al segmento.</li>
+      </ul>
+      <p class="prose"><strong>Tipos de producto</strong> (costo base por producto) se edita en esta misma pantalla, junto a Canales, y comparte el mismo botón "Guardar Parámetros" que Parámetros Financieros (Sección 05) — los tres PUT (<code>/admin/parametros</code>, <code>/admin/tiposproducto</code>, <code>/admin/canales</code>) se disparan juntos al guardar.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 07: SHOCKS DE MERCADO -->
+    <section class="section" id="sec-shocks">
+      <div class="section-header">
+        <div class="section-num">07</div>
+        <div class="section-title-block">
+          <h3>Shocks de Mercado</h3>
+          <p>Cómo y cuándo se activan boom/crisis, y el override manual de un shock</p>
+        </div>
+      </div>
+      <p class="prose">Cada ronda puede recibir un <strong>evento de mercado (shock)</strong> que sube o baja la demanda formal de todos los segmentos por un factor fijo. El catálogo tiene 8 eventos — 4 booms (mercado favorable) y 4 crisis (mercado adverso) — más la opción "sin evento":</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Tipo</th><th>Evento</th><th>Efecto en demanda</th></tr></thead>
+          <tbody>
+            <tr><td>📈 Boom</td><td>Crecimiento económico regional</td><td>+18%</td></tr>
+            <tr><td>🏪 Boom</td><td>Feria comercial internacional</td><td>+12%</td></tr>
+            <tr><td>🚀 Boom</td><td>Tendencia viral en redes</td><td>+25%</td></tr>
+            <tr><td>🌍 Boom</td><td>Acuerdo comercial regional</td><td>+15%</td></tr>
+            <tr><td>📉 Crisis</td><td>Recesión económica</td><td>−18%</td></tr>
+            <tr><td>⚠️ Crisis</td><td>Importaciones ilegales</td><td>−13%</td></tr>
+            <tr><td>🏛️ Crisis</td><td>Nueva regulación sectorial</td><td>−12%</td></tr>
+            <tr><td>💸 Crisis</td><td>Inflación segmento premium</td><td>−20%</td></tr>
+            <tr><td>⚖️ Neutral</td><td>Mercado estable</td><td>Sin impacto</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Modo aleatorio (por defecto)</h4>
+      <p class="prose">Si no se elige nada, el sistema sortea un evento usando <strong>Prob. Boom</strong> y <strong>Prob. Crisis</strong> (0.35 cada una por defecto, configurables en la pestaña Shocks — "Prob. Neutral" se calcula sola como el resto: 1 − Boom − Crisis) con una semilla determinista basada en la simulación y el número de ronda: si se recalcula esa ronda más adelante, siempre sale el mismo resultado — no cambia entre ejecuciones.</p>
+
+      <h4>Override manual del profesor</h4>
+      <p class="prose">En el dashboard de administración, justo antes de ejecutar una simulación de ronda (roundState <code>locked</code> o <code>pre-sim</code>), aparece un selector <strong>"Evento a aplicar"</strong> con las 8 opciones del catálogo más "Aleatorio" y "Mercado estable (sin impacto)". Si el profesor elige un evento específico, ese es el que se aplica a esa ronda — no se sortea nada. Esto es útil para forzar un escenario pedagógico puntual (por ejemplo, provocar una crisis justo antes de un cierre de módulo para ver cómo reaccionan los equipos).</p>
+      <p class="prose">Este selector está disponible para <strong>profesor y superadmin</strong> por igual (el endpoint <code>/admin/simular</code> no está restringido a superadmin) — a diferencia de Segmentos/Afinidad/Canales/Parámetros, elegir el shock de una ronda es una acción operativa del ciclo de juego, no un cambio de configuración estructural.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 08: COMPETIDORES FIJOS (BOTS) -->
+    <section class="section" id="sec-bots">
+      <div class="section-header">
+        <div class="section-num">08</div>
+        <div class="section-title-block">
+          <h3>Competidores Fijos (Bots)</h3>
+          <p>Los 2 arquetipos por segmento — Líder en Costos y Diferenciador</p>
+        </div>
+      </div>
+      <p class="prose">En cada ronda simulada, el sistema agrega automáticamente <strong>2 competidores bot por cada uno de los 6 segmentos</strong> (12 bots en total) — no hay ningún interruptor ni pantalla para activarlos, desactivarlos o configurar su nivel: corren siempre, en toda ronda que se calcule, sin depender de ninguna API externa.</p>
+
+      <h4>Los dos arquetipos</h4>
+      <table>
+        <thead><tr><th>Arquetipo</th><th>Calidad</th><th>Precio</th><th>Producción</th></tr></thead>
+        <tbody>
+          <tr><td><strong>Líder en Costos</strong></td><td>5</td><td>Costo base del producto × 1.10</td><td>300 u.</td></tr>
+          <tr><td><strong>Diferenciador</strong></td><td>6</td><td>Costo base del producto × 1.40</td><td>200 u.</td></tr>
+        </tbody>
+      </table>
+      <p class="prose">Cada bot elige el producto con mejor afinidad para su segmento (misma matriz de la Sección 06) y vende siempre por el canal "Convenios Institucionales", con vendedores y marketing bajos — así ningún bot acumula ventaja en más de un eje a la vez. Si un segmento no tiene ningún producto con afinidad definida, o el costo base de ese producto es 0 o no está configurado, ese segmento simplemente no recibe bots esa ronda.</p>
+      <p class="prose">Los bots aparecen en los resultados de ronda con IDs del tipo <code>bot_lider_&lt;idxSegmento&gt;_r&lt;ronda&gt;</code> y <code>bot_dif_&lt;idxSegmento&gt;_r&lt;ronda&gt;</code>, y se distinguen de los equipos humanos por el flag <code>isBot: true</code> en sus decisiones y resultados.</p>
+      <p class="prose">No hay ninguna acción del profesor para esta sección — es puramente informativa, para entender por qué aparecen esos 12 competidores en el ranking y los reportes de mercado de cada ronda.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 09: COMPETENCIA EXTERNA (PANEL) -->
+    <section class="section" id="sec-comp-externa">
+      <div class="section-header">
+        <div class="section-num">09</div>
+        <div class="section-title-block">
+          <h3>Competencia Externa (panel)</h3>
+          <p>Qué hace y qué no hace este campo del panel de administración</p>
+        </div>
+      </div>
+      <p class="prose">La pestaña <strong>"Competencia"</strong> del panel de administración <strong>no es un editor</strong> — es un tablero de solo lectura que muestra la calibración y los resultados reales de los <a href="#sec-bots">12 bots fijos</a> (Sección 08): por cada segmento, el precio y calidad de referencia de Líder en Costos y Diferenciador, y — una vez calculada al menos una ronda — sus ventas, ventas brutas, participación de mercado y estado de caja en la ronda elegida.</p>
+      <p class="prose">Existe, además, un campo distinto en la base de datos llamado <code>competencia_externa</code> (con su propio endpoint <code>GET/PUT /admin/competencia</code>, exclusivo de superadmin para el PUT) pensado para modelar competidores externos con <em>precio, calidad, marketing y participación de referencia</em> propios. <strong>Ese campo no tiene ninguna pantalla que lo edite</strong> hoy — el endpoint existe en el servidor pero ningún módulo del frontend lo llama. En la práctica no tiene efecto sobre la simulación: no se usa en ningún cálculo del motor (<code>src/engine.js</code>).</p>
+      <p class="prose">En resumen: si buscás "competencia" en el panel, lo que vas a ver es el desempeño de los bots fijos, no un lugar para configurar competidores adicionales.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 10: CICLO DE UNA RONDA -->
+    <section class="section" id="sec-ciclo-ronda">
+      <div class="section-header">
+        <div class="section-num">10</div>
+        <div class="section-title-block">
+          <h3>Ciclo de una Ronda</h3>
+          <p>Abrir, pre-simular, simular y cerrar — los 5 estados reales</p>
+        </div>
+      </div>
+      <p class="prose">Cada ronda de la simulación pasa por 5 estados (campo <code>roundState</code>), en este orden. El botón que ve el profesor en el dashboard de administración cambia según el estado actual:</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Estado</th><th>Botón / acción</th><th>Qué pasa</th></tr></thead>
+          <tbody>
+            <tr><td><code>pending</code></td><td>▶ Activar Hoja de Decisiones</td><td>La ronda todavía no arrancó. Los equipos no pueden ingresar decisiones.</td></tr>
+            <tr><td><code>open</code></td><td>📊 Pre-simular / 🔒 Cerrar envíos</td><td>Los equipos ven la hoja de decisiones y pueden enviar. El profesor puede pre-simular (ver más abajo) o cerrar envíos directamente.</td></tr>
+            <tr><td><code>locked</code></td><td>📊 Pre-simular / ⚡ Ejecutar Simulación (sin pre-sim)</td><td>Los envíos se cerraron — ya no se aceptan más decisiones de equipos. El profesor puede pre-simular o ir directo a la simulación final.</td></tr>
+            <tr><td><code>pre-sim</code></td><td>⚡ Ejecutar Simulación Final / ⏩ Forzar confirmaciones pendientes</td><td>Se calculó una demanda estimada y se notificó a los equipos, que pueden confirmar antes del cálculo final.</td></tr>
+            <tr><td><code>simulated</code></td><td>→ Abrir Ronda N+1 (o "🏆 Simulación completada" en la ronda 20)</td><td>La ronda ya se calculó (asientos, resultados, ranking). Al avanzar, la ronda siguiente vuelve a <code>pending</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h4>Activar, cerrar, pre-simular, simular</h4>
+      <ul class="prose-list">
+        <li><strong>Activar</strong> (<code>POST /admin/ronda/activar</code>) — pasa de <code>pending</code> a <code>open</code>. Si la simulación usa Constitución de Fase 0 (Sección 03) y Fase 0 sigue abierta, este botón se bloquea con un error explícito hasta que se cierre Fase 0.</li>
+        <li><strong>Cerrar envíos</strong> (<code>POST /admin/ronda/cerrar</code>) — pasa de <code>open</code> a <code>locked</code>. Falla si queda algún equipo humano sin enviar su decisión (el error lista los equipos pendientes por nombre).</li>
+        <li><strong>Pre-simular</strong> (<code>POST /admin/ronda/pre-simular</code>) — calcula una demanda estimada y se la muestra a los equipos antes del cálculo final; pasa a <code>pre-sim</code>. Es opcional: desde <code>locked</code> también se puede ir directo a "Ejecutar Simulación (sin pre-sim)".</li>
+        <li><strong>Ejecutar Simulación</strong> (<code>POST /admin/simular</code>) — corre el motor con las decisiones de todos los equipos humanos más los 12 bots fijos (Sección 08), aplica el shock de mercado elegido (Sección 07) y pasa a <code>simulated</code>.</li>
+      </ul>
+      <p class="prose">Todas estas acciones (activar, pre-simular, cerrar, simular) usan <code>needAdmin()</code> — están disponibles tanto para <strong>profesor</strong> como para <strong>superadmin</strong>, porque son parte de la operación normal del ciclo de juego, no configuración estructural.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 11: RECALCULAR — RONDA VS. BALANCE -->
+    <section class="section" id="sec-recalcular">
+      <div class="section-header">
+        <div class="section-num">11</div>
+        <div class="section-title-block">
+          <h3>Recalcular: Ronda vs. Balance</h3>
+          <p>Cuándo usar cada uno, y cómo verificar el resultado</p>
+        </div>
+      </div>
+      <p class="prose">Existen cuatro mecanismos distintos con nombres parecidos. Tres tienen botón en el panel — el cuarto existe en el servidor pero ninguna pantalla lo usa hoy:</p>
+
+      <h4>1. Recalcular Estados Financieros (pantalla dedicada) — el que vas a usar</h4>
+      <p class="prose">Re-ejecuta el motor contable para <strong>todas las rondas ya simuladas</strong>, en orden cronológico, con los parámetros actuales de la industria. Conserva las decisiones originales de los equipos y actualiza Estado de Resultados, Balance y Flujo de Caja de cada ronda. Es la herramienta correcta después de corregir un parámetro (Sección 05) que afecta rondas que ya se habían calculado con el valor anterior, para que todo el historial quede consistente con la configuración corregida.</p>
+
+      <h4>2. "↻ Recalcular" en Conciliación Motor 1 vs Motor 2 — por ronda individual</h4>
+      <p class="prose">Dentro del detalle de cada ronda simulada hay un botón <strong>"⚖ Conciliación Motor 1 vs Motor 2"</strong> y, junto a él, <strong>"↻ Recalcular"</strong>. Esto no recalcula el motor de negocio — compara los totales de Activo, Pasivo y Patrimonio que calculó el Motor 1 (legacy) contra los que generó el Motor 2 (partida doble, <code>src/contabilidad/</code>) para esa misma ronda, y marca con ⚠ cualquier diferencia mayor a la tolerancia configurada (2 Bs por defecto). "↻ Recalcular" simplemente vuelve a generar esa comparación en vez de usar la guardada. Solo aparece si la simulación usa <code>motorContable=partida_doble</code>.</p>
+
+      <h4>3. "Recalcular también el Libro Mayor (Motor 2, partida doble)" — el que corrige el Libro Mayor</h4>
+      <p class="prose">Aparece como segundo botón en la misma pantalla de "Recalcular Estados Financieros" (mecanismo 1), solo si la simulación usa <code>motorContable=partida_doble</code>. A diferencia del mecanismo 1, que únicamente vuelve a calcular el Motor 1, este detecta automáticamente desde qué ronda el Motor 1 y el Motor 2 dejaron de coincidir, corrige el Motor 1 en ese rango, y luego anula y regenera los asientos del Motor 2 ronda por ronda. Es la herramienta correcta cuando corregiste una decisión o un parámetro en una simulación de partida doble y necesitás que el Libro Mayor quede consistente — <strong>el mecanismo 1 por sí solo no actualiza los asientos del Motor 2</strong>.</p>
+      <p class="prose">El reporte que devuelve tiene dos partes: si el Motor 1 se recalculó sin errores, y qué rondas del Motor 2 se regeneraron con éxito. Si el proceso se detiene a mitad de camino, el reporte indica exactamente hasta dónde llegó — las rondas ya regeneradas quedan como están, las que faltan conservan sus asientos originales, nunca un estado intermedio sin avisar. Verificá el resultado con la Conciliación Motor 1 vs Motor 2 (mecanismo 2).</p>
+
+      <p class="prose">Existe además un endpoint <code>/admin/recalcular-ronda</code> (recalcula una sola ronda histórica) que está implementado en el servidor pero <strong>no tiene ningún botón que lo llame</strong> en el frontend actual — no forma parte del flujo operativo hoy.</p>
+
+      <h4>Cómo verificar el resultado</h4>
+      <p class="prose">"Recalcular Estados Financieros" devuelve un reporte con la cantidad de rondas y registros actualizados, y una lista de <code>alertasCuadre</code> si algún equipo quedó descuadrado en alguna ronda. "Recalcular también el Libro Mayor" devuelve su propio reporte de dos fases (arriba). La Conciliación Motor 1 vs Motor 2 marca con ✓ verde cada fila que coincide dentro de tolerancia, y con ⚠ roja la que no — revisala después de cualquier recálculo masivo si la simulación usa partida doble.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 12: GESTIÓN DE USUARIOS Y EQUIPOS -->
+    <section class="section" id="sec-usuarios">
+      <div class="section-header">
+        <div class="section-num">12</div>
+        <div class="section-title-block">
+          <h3>Gestión de Usuarios y Equipos</h3>
+          <p>Crear/editar equipos, invitaciones, y alcance de cada rol</p>
+        </div>
+      </div>
+      <p class="prose">Hay dos niveles de gestión de personas, con alcance y permisos distintos: <strong>equipos</strong> (los jugadores de una simulación) y <strong>usuarios profesor/superadmin</strong> (las cuentas del panel de administración).</p>
+
+      <h4>Equipos — disponible para profesor y superadmin</h4>
+      <p class="prose">Dentro de una simulación, el profesor puede:</p>
+      <ul class="prose-list">
+        <li><strong>Crear</strong> un equipo (nombre, contraseña, miembros) — se le crea automáticamente una fila de Fase 0 vacía si la simulación usa Constitución de Fase 0 (Sección 03).</li>
+        <li><strong>Renombrar</strong> o <strong>editar</strong> (nombre y/o contraseña juntos) un equipo existente.</li>
+        <li><strong>Cambiar la contraseña</strong> de un equipo por separado.</li>
+        <li><strong>Asignar un capital inicial específico</strong> a un equipo puntual, distinto del capital global de la industria (o volver a heredar el global, enviando <code>null</code>).</li>
+        <li><strong>Resetear el envío</strong> de la ronda actual de un equipo (vuelve su decisión a "no enviada", solo si la ronda no está ya simulada) — útil si un equipo se equivocó y ya cerraste envíos.</li>
+        <li><strong>Eliminar</strong> un equipo (borra también sus decisiones).</li>
+      </ul>
+      <p class="prose">Todo esto vive dentro del contexto de una simulación — no hay gestión de equipos "global", cada simulación tiene su propio set de equipos.</p>
+
+      <h4>Usuarios profesor — exclusivo de superadmin</h4>
+      <p class="prose">Solo el superadmin puede <strong>listar, crear o eliminar</strong> cuentas de profesor (<code>/admin/usuarios</code>). Al crear una, el servidor devuelve la contraseña en texto plano una única vez, para que el superadmin se la entregue al profesor.</p>
+
+      <h4>Invitaciones — exclusivo de superadmin</h4>
+      <p class="prose">Es un mecanismo alternativo para dar de alta una cuenta de <strong>profesor o superadmin</strong> (no equipos): el superadmin genera un link con token de un solo uso y fecha de expiración desde <code>/admin/invitaciones</code>, se lo comparte a la persona, y esa persona completa su propio nombre y contraseña al abrir el link — el superadmin nunca ve ni define esa contraseña.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 13: RESULTADOS, REPORTES Y RANKING -->
+    <section class="section" id="sec-resultados">
+      <div class="section-header">
+        <div class="section-num">13</div>
+        <div class="section-title-block">
+          <h3>Resultados, Reportes y Ranking</h3>
+          <p>Ver/exportar resultados, niveles de investigación de mercado, ranking, y criterios de evaluación</p>
+        </div>
+      </div>
+      <p class="prose">El profesor ve los resultados completos de cada ronda simulada (<code>/admin/resultados/:n</code>, incluyendo la Ronda 0 = Balance Inicial de Fase 0 si la simulación usa partida doble) sin ninguna restricción — a diferencia de los equipos, que tienen un candado propio.</p>
+
+      <h4>El candado de Investigación de Mercado (solo aplica a los equipos)</h4>
+      <p class="prose">Un equipo solo ve el <strong>ranking</strong> (posición de todas las empresas) de una ronda si compró Investigación de Mercado (<strong>Básica, Premium o Estratégico</strong>) <em>en esa misma ronda</em> — no hay acumulado ni vigencia entre rondas: un equipo que compró investigación en la Ronda 1 no ve el ranking de la Ronda 20 salvo que vuelva a comprarla ahí. Si no compró, la pantalla de ranking del equipo muestra el mensaje de bloqueo en vez de la tabla. Esto es exclusivamente una restricción del lado del equipo — el profesor siempre ve todo, sin necesidad de que ningún equipo haya comprado investigación.</p>
+
+      <h4>Cómo se arma el ranking</h4>
+      <p class="prose">Los resultados de ronda vienen por <strong>producto</strong> (una empresa con varios productos activos ocupa varias filas). Antes de rankear, el sistema consolida por empresa: utilidad neta y ventas reales se <strong>suman</strong> entre productos, el market share se <strong>promedia</strong> (sumarlo daría más de 100% si la empresa vende en varios segmentos), y la caja final se toma una sola vez (es un valor de empresa, no de producto). El ranking ordena por utilidad neta descendente.</p>
+
+      <h4>Exportar</h4>
+      <p class="prose">Los reportes por equipo y ronda (Estado de Resultados, Balance, Flujo de Caja) se generan desde la misma pantalla de resultados de ronda del panel de administración — no hay un botón de exportación masiva a Excel/PDF separado; la exportación es la vista de cada reporte tal como la ve el equipo.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 14: CHECKLISTS OPERATIVOS -->
+    <section class="section" id="sec-checklists">
+      <div class="section-header">
+        <div class="section-num">14</div>
+        <div class="section-title-block">
+          <h3>Checklists Operativos</h3>
+          <p>Antes de iniciar una simulación, cerrar una ronda, y publicar resultados</p>
+        </div>
+      </div>
+      <p class="prose">Resumen operativo de lo cubierto en las secciones anteriores, para tener a mano durante una sesión en vivo.</p>
+
+      <h4>Antes de iniciar una simulación</h4>
+      <ul class="prose-list">
+        <li>☐ Simulación creada con la industria correcta (Sección 02) y el modo de inicio que corresponda.</li>
+        <li>☐ Equipos creados, con nombre y contraseña entregados a cada grupo (Sección 12).</li>
+        <li>☐ Si la simulación usa Constitución de Fase 0: los 3 candados completos antes de activar la Ronda 1 — todos los equipos humanos con Fase 0 enviada/cerrada, y los 3 gastos fijos configurados (Sección 03).</li>
+        <li>☐ Parámetros financieros, segmentos, afinidad y canales revisados si vas a usar una industria distinta a la que trae por defecto (Secciones 05 y 06).</li>
+      </ul>
+
+      <h4>Antes de cerrar envíos de una ronda</h4>
+      <ul class="prose-list">
+        <li>☐ Revisar en el dashboard cuántos equipos ya enviaron — "Cerrar envíos" falla y lista por nombre a los que faltan (Sección 10).</li>
+        <li>☐ Decidir si vas a pre-simular (mostrar demanda estimada antes del cálculo final) o ir directo a la simulación.</li>
+        <li>☐ Decidir el shock de mercado de esa ronda: dejarlo en aleatorio o forzar un evento específico desde el selector del dashboard (Sección 07).</li>
+      </ul>
+
+      <h4>Antes de publicar/revisar resultados</h4>
+      <ul class="prose-list">
+        <li>☐ Verificar que la ronda quedó en estado <code>simulated</code> antes de mirar resultados o abrir la siguiente ronda.</li>
+        <li>☐ Si la simulación usa partida doble, revisar la Conciliación Motor 1 vs Motor 2 de la ronda — cualquier ⚠ conviene investigarlo antes de dar la ronda por cerrada (Sección 11).</li>
+        <li>☐ Recordar que el ranking que ven los equipos depende de que hayan comprado Investigación de Mercado esa ronda — el profesor siempre ve todo sin ese requisito (Sección 13).</li>
+        <li>☐ Si corregiste un parámetro que afecta rondas ya calculadas, correr "Recalcular Estados Financieros" para que todo el historial quede consistente (Sección 11).</li>
+      </ul>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 15: BACKUPS Y RESTAURACIÓN -->
+    <section class="section" id="sec-backups">
+      <div class="section-header">
+        <div class="section-num">15</div>
+        <div class="section-title-block">
+          <h3>Backups y Restauración</h3>
+          <p>Procedimiento seguro — toda restauración exige respaldo previo</p>
+        </div>
+      </div>
+      <p class="prose">Backup y restauración están disponibles para <strong>profesor y superadmin</strong> por igual. Un profesor solo puede respaldar y restaurar simulaciones de su propia autoría — el filtro por dueño impide descargar el backup de una simulación ajena aunque se conozca su ID.</p>
+
+      <h4>Generar un backup</h4>
+      <p class="prose">Descarga un archivo <code>.json</code> con todo lo necesario para reconstruir la simulación: configuración, parámetros, tipos de producto, canales, segmentos, matriz de afinidad, equipos, rondas, decisiones y resultados. El nombre del archivo incluye la fecha y la ronda actual (<code>backup_simnego_AAAA-MM-DD_R#.json</code>).</p>
+      <p class="prose"><strong>Importante para simulaciones de partida doble:</strong> el backup y la restauración reconstruyen equipos, rondas, decisiones y resultados del Motor 1 (Estados Financieros) — pero, en el estado actual del sistema, <strong>no reconstruyen los asientos del Libro Mayor (Motor 2)</strong>. Si restaurás una simulación con <code>motorContable=partida_doble</code>, el Libro Mayor queda vacío hasta que lo recalculés manualmente (Sección 11, mecanismo 3).</p>
+
+      <h4>Restaurar — dos modos, uno de ellos destructivo</h4>
+      <ul class="prose-list">
+        <li><strong>"Nueva"</strong> — crea una simulación completamente nueva a partir del backup, con un ID nuevo y "(restaurado &lt;fecha&gt;)" agregado al nombre. No toca ninguna simulación existente. Es la opción segura por defecto.</li>
+        <li><strong>"Sobrescribir"</strong> — restaura sobre el ID de simulación que trae el backup. <strong>Antes de reinsertar los datos, borra todas las rondas y decisiones ya guardadas de esa simulación.</strong> Es irreversible si no tenés otro backup más reciente de esa misma simulación. Por eso el servidor exige mandar explícitamente <code>confirmar: true</code> además de elegir este modo — sin esa confirmación, la restauración se rechaza.</li>
+      </ul>
+      <p class="prose"><strong>Regla práctica: antes de restaurar en modo "Sobrescribir", generá primero un backup del estado actual.</strong> Si el backup que vas a restaurar resulta tener un problema, ese respaldo reciente es tu única forma de volver atrás — el modo "Sobrescribir" no guarda ninguna copia de lo que borra.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- SECCIÓN 16: TROUBLESHOOTING -->
+    <section class="section" id="sec-troubleshooting">
+      <div class="section-header">
+        <div class="section-num">16</div>
+        <div class="section-title-block">
+          <h3>Troubleshooting</h3>
+          <p>Verificar que el servidor esté corriendo, y errores comunes de login</p>
+        </div>
+      </div>
+      <h4>¿El servidor está corriendo?</h4>
+      <p class="prose">No hay un endpoint de estado separado — la forma de verificarlo es abrir la URL de la aplicación en el navegador. Si el servidor está activo, carga la pantalla de login (cualquier ruta desconocida cae al mismo <code>index.html</code>, incluida la raíz). Si no carga nada o da error de conexión, el servidor no está corriendo o no es alcanzable desde tu red — contactá al administrador técnico.</p>
+
+      <h4>Errores comunes al iniciar sesión</h4>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Mensaje</th><th>Causa</th></tr></thead>
+          <tbody>
+            <tr><td>"Credenciales requeridas"</td><td>Falta usuario o contraseña en el formulario.</td></tr>
+            <tr><td>"Usuario o contraseña incorrectos"</td><td>El identificador (email de profesor/superadmin, o nombre de equipo) no existe en el sistema, o la contraseña no coincide.</td></tr>
+            <tr><td>"Se requiere el código del simulador para ingresar como equipo"</td><td>El nombre ingresado corresponde a un equipo, y la simulación tiene código de acceso configurado, pero no se ingresó ningún código.</td></tr>
+            <tr><td>"Código del simulador incorrecto"</td><td>El código ingresado no coincide con el código de acceso de la simulación a la que pertenece ese equipo. Si el mismo nombre de equipo existe en más de una simulación, el código es lo que desambigua a cuál te estás conectando.</td></tr>
+            <tr><td>"Error de configuración de cuenta. Contacta al administrador."</td><td>La cuenta existe pero no tiene contraseña configurada correctamente en la base de datos — requiere intervención técnica, no es un error del usuario.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="prose">Un equipo se identifica por <strong>nombre</strong> (no por email), y solo se busca en las simulaciones existentes — si un profesor todavía no creó el equipo (Sección 12), no va a poder loguearse aunque el nombre y la contraseña que tenga en mente sean los correctos.</p>
+    </section>
+
+    <hr class="divider" />
+
+    <!-- ══════════════ ANEXOS ══════════════ -->
+    <section class="section visible" id="sec-anexos">
+      <div class="section-header">
+        <div class="section-num">📎</div>
+        <div class="section-title-block">
+          <h3>Anexos — Referencia Rápida</h3>
+          <p>Tablas de consulta para resolver dudas puntuales sin releer todo el manual</p>
+        </div>
+      </div>
+
+      <div class="annex-index">
+        <div class="annex-index-grid">
+          <a class="annex-index-item" href="#anx-a"><span class="anx-letter">A</span><span class="anx-title">Glosario de Roles y Estados</span></a>
+        </div>
+      </div>
+
+      <!-- ── ANEXO A ──────────────────────────────── -->
+      <div class="annex-section" id="anx-a">
+        <div class="annex-section-header">
+          <div class="anx-badge">A</div>
+          <div>
+            <h4>Glosario de Roles y Estados</h4>
+            <p>Tabla de referencia rápida: los 3 roles, los 5 estados de ronda, los 2 motores contables</p>
+          </div>
+        </div>
+        <h4>Roles</h4>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Rol</th><th>Alcance</th></tr></thead>
+            <tbody>
+              <tr><td><code>superadmin</code></td><td>Acceso completo: configuración estructural (parámetros, segmentos, afinidad, canales, tipos de producto, módulos opcionales), gestión de cuentas profesor e invitaciones, todo lo que puede hacer un profesor.</td></tr>
+              <tr><td><code>profesor</code></td><td>Operación del día a día de sus propias simulaciones: crear/gestionar equipos, ciclo de ronda (activar/cerrar/pre-simular/simular), shocks de mercado, recálculos, backups/restauración. Ve la configuración estructural pero no puede guardar cambios ahí — los controles quedan deshabilitados.</td></tr>
+              <tr><td><code>equipo</code></td><td>Un equipo jugador dentro de una simulación: ingresa decisiones por ronda, ve sus propios reportes, y el ranking si compró Investigación de Mercado esa ronda.</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="prose">El sistema reconoce un cuarto valor de rol (<code>admin</code>) a nivel de base de datos, pero no tiene ningún código funcional asociado — no se usa en ningún flujo real hoy.</p>
+
+        <h4>Estados de ronda (<code>roundState</code>)</h4>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Estado</th><th>Significado</th></tr></thead>
+            <tbody>
+              <tr><td><code>pending</code></td><td>La ronda todavía no arrancó — los equipos no pueden ingresar decisiones.</td></tr>
+              <tr><td><code>open</code></td><td>Los equipos ven la hoja de decisiones y pueden enviar.</td></tr>
+              <tr><td><code>locked</code></td><td>Los envíos se cerraron, ya no se aceptan más decisiones.</td></tr>
+              <tr><td><code>pre-sim</code></td><td>Se calculó una demanda estimada y se notificó a los equipos antes del cálculo final.</td></tr>
+              <tr><td><code>simulated</code></td><td>La ronda ya se calculó por completo. Al avanzar a la siguiente ronda, vuelve a <code>pending</code>.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h4>Motores contables</h4>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Motor</th><th>Cuándo se usa</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Motor 1 (legacy)</strong></td><td>El motor de cálculo original, en <code>src/engine.js</code>. Es el que corre siempre, en toda simulación — no requiere ninguna configuración especial.</td></tr>
+              <tr><td><strong>Motor 2 (partida doble)</strong></td><td>Motor contable adicional en <code>src/contabilidad/</code>, que genera asientos de partida doble reales (Libro Mayor, Balance, Estado de Resultados). Solo corre si la simulación tiene <code>motorContable: 'partida_doble'</code> configurado explícitamente — ninguna plantilla de industria lo trae por defecto. Cuando está activo, la Sección 11 permite conciliar sus totales contra los del Motor 1.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+    </section><!-- /sec-anexos -->
+
+  </main>
+</div><!-- /layout -->
+
+<!-- Back to top -->
+<button class="back-top" id="backTop" onclick="window.scrollTo({top:0,behavior:'smooth'})" title="Volver arriba">↑</button>
+
+<script>
+  // ── Sidebar mobile ──────────────────────────────
+  const sidebar  = document.getElementById('sidebar');
+  const overlay  = document.getElementById('overlay');
+  const menuToggle = document.getElementById('menuToggle');
+
+  menuToggle.addEventListener('click', () => {
+    sidebar.classList.toggle('open');
+    overlay.classList.toggle('show');
+  });
+  overlay.addEventListener('click', closeMenu);
+
+  function closeMenu() {
+    sidebar.classList.remove('open');
+    overlay.classList.remove('show');
+  }
+
+  // ── Back to top ─────────────────────────────────
+  const backTop = document.getElementById('backTop');
+  window.addEventListener('scroll', () => {
+    backTop.classList.toggle('show', window.scrollY > 400);
+  });
+
+  // ── Scroll spy ──────────────────────────────────
+  const sections = document.querySelectorAll('section[id]');
+  const navItems = document.querySelectorAll('.nav-item');
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) {
+        navItems.forEach(n => n.classList.remove('active'));
+        const active = document.querySelector(`.nav-item[href="#${e.target.id}"]`);
+        if (active) active.classList.add('active');
+      }
+    });
+  }, { rootMargin: '-30% 0px -60% 0px' });
+
+  sections.forEach(s => observer.observe(s));
+
+  // ── Section reveal on scroll ────────────────────
+  const revealObs = new IntersectionObserver((entries) => {
+    entries.forEach(e => {
+      if (e.isIntersecting) e.target.classList.add('visible');
+    });
+  }, { threshold: 0, rootMargin: '0px 0px -50px 0px' });
+
+  document.querySelectorAll('.section').forEach(s => revealObs.observe(s));
+
+  // ── Annex sections reveal ───────────────────────
+  document.querySelectorAll('.annex-section').forEach(s => revealObs.observe(s));
+</script>
+</body>
+</html>

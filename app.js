@@ -1,0 +1,4203 @@
+'use strict';
+// ─────────────────────────────────────────────────────────────
+//  SIMULADOR MARKETING — FRONTEND UNIFICADO
+//  Maneja: Login · Admin · Equipo
+// ─────────────────────────────────────────────────────────────
+
+const fmt = {
+  bs:  v => `Bs ${(+v||0).toLocaleString('es-BO',{maximumFractionDigits:0})}`,
+  num: v => (+v||0).toLocaleString('es-BO',{maximumFractionDigits:0}),
+  pct: v => `${((+v||0)*100).toFixed(2)}%`,
+  // redondear vive en modules/ui-components.js (redondeo comercial, la mitad se
+  // aleja de cero). fmt.d solo corre al dibujar, después de DOMContentLoaded
+  // (init, al final de este archivo), cuando todos los scripts ya cargaron.
+  d:   (v,n=2) => redondear(+v||0, n).toFixed(n),
+  dt:  s => s ? new Date(s).toLocaleString('es-BO',{dateStyle:'short',timeStyle:'short'}) : '—',
+};
+
+let charts = {};
+let state = { me: null, ref: null, decisiones: null, resultados: null };
+
+// Helper compartido con admin-parametros.js (mismo scope global, scripts clásicos)
+// para el RBAC de solo-lectura del rol profesor — Bloque 3.
+function esSuperAdmin() {
+  return state.me?.rol === 'superadmin';
+}
+
+// modificaciones en public/app.js (listener WebSocket + UI de bots + selector de industria)
+// =============================================================================
+// INSTRUCCIONES DE APLICACIÓN:
+//
+//   1. BLOQUE A: Añadir el módulo WS_CLIENT justo DESPUÉS de la declaración
+//      de `let state = { ... }` (alrededor de la línea 16).
+//
+//   2. BLOQUE B: En la función `doLogin()`, añadir `wsClient.conectar()`
+//      DESPUÉS de que el login es exitoso y antes de retornar.
+//      Busca: `toast(\`Bienvenido...`
+//
+//   3. BLOQUE C: Añadir el selector de industria al formulario de nueva
+//      simulación. Busca el div con id="newSimCopyFrom" y añade el campo
+//      después.
+//
+//   4. BLOQUE D: En `crearSimulacion()`, añadir la lectura del campo industria
+//      al construir el body del POST.
+//
+//   5. BLOQUE E: Añadir la sección de Bots al final de `loadAdminEquipos()`.
+//      El bloque se añade después del innerHTML del equiposTableWrap.
+//
+//   6. BLOQUE F: Añadir las funciones de gestión de bots (window.*Bot*).
+//      Añadir después de `window.cambiarPassword`.
+// =============================================================================
+
+
+// ══ BLOQUE A — módulo WebSocket del cliente (añadir tras `let state = ...`) ═══
+
+// ── WebSocket client ─────────────────────────────────────────────────────────
+// Gestiona la conexión en tiempo real con el servidor.
+// Se conecta automáticamente al seleccionar una simulación.
+const wsClient = (() => {
+  let socket = null;
+  let simIdActivo = null;
+  let intentosReconexion = 0;
+  const MAX_INTENTOS = 8;
+  const DELAY_BASE_MS = 1500;
+
+  // Con el servidor en Supabase no hay WebSocket: se consulta el estado de la ronda cada 20 s
+  // y, si cambió, se dispara el mismo evento que antes enviaba el servidor.
+  let sondeo = null, ultimoEstado = null;
+  function iniciarSondeo() {
+    if (sondeo) clearInterval(sondeo);
+    ultimoEstado = null;
+    const revisar = async () => {
+      try {
+        const e = await api('GET', '/api/estado-ronda');
+        const clave = e.currentRound + '|' + e.roundState;
+        if (ultimoEstado && clave !== ultimoEstado) {
+          if (e.roundState === 'simulated') manejarEventoWS('ronda_calculada', { ronda: e.currentRound });
+          else if (e.roundState === 'open') manejarEventoWS('ronda_abierta', { ronda: e.currentRound });
+          else if (e.roundState === 'pre-sim') manejarEventoWS('presim_disponible', {});
+        }
+        ultimoEstado = clave;
+      } catch (err) { /* sin sesión o sin red: se reintenta en la próxima vuelta */ }
+    };
+    revisar();
+    sondeo = setInterval(revisar, 20000);
+  }
+
+  function conectar(simId) {
+    if (window.SIMMKT_API) { simIdActivo = simId || state.currentSimId; if (simIdActivo) iniciarSondeo(); return; }
+    // Si ya hay conexión para esta sim, no reconectar
+    if (socket && socket.readyState === WebSocket.OPEN && simIdActivo === simId) return;
+    // Cerrar conexión anterior si existe
+    if (socket) { socket.close(); socket = null; }
+
+    simIdActivo  = simId || state.currentSimId;
+    if (!simIdActivo) return;  // sin sim activa, no conectar
+
+    const rol      = state.me?.rol || 'equipo';
+    const equipoId = state.me?.id  || '';
+    const proto    = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const url      = `${proto}//${location.host}/ws?simId=${simIdActivo}&rol=${rol}&equipoId=${equipoId}`;
+
+    try {
+      socket = new WebSocket(url);
+    } catch (e) {
+      console.warn('[ws] No se pudo crear WebSocket:', e.message);
+      return;
+    }
+
+    socket.onopen = () => {
+      intentosReconexion = 0;
+      console.log(`[ws] ✓ Conectado a sim "${simIdActivo}"`);
+    };
+
+    socket.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      manejarEventoWS(msg.evento, msg.datos);
+    };
+
+    socket.onclose = (evt) => {
+      console.log(`[ws] Conexión cerrada (código ${evt.code})`);
+      socket = null;
+      // Reconexión exponencial (solo si fue un cierre inesperado)
+      if (evt.code !== 1000 && intentosReconexion < MAX_INTENTOS) {
+        const delay = DELAY_BASE_MS * Math.pow(1.5, intentosReconexion);
+        intentosReconexion++;
+        console.log(`[ws] Reconectando en ${Math.round(delay / 1000)}s... (intento ${intentosReconexion})`);
+        setTimeout(() => conectar(simIdActivo), delay);
+      }
+    };
+
+    socket.onerror = (err) => {
+      console.warn('[ws] Error de conexión WebSocket');
+    };
+  }
+
+  function desconectar() {
+    if (sondeo) { clearInterval(sondeo); sondeo = null; ultimoEstado = null; }
+    if (socket) { socket.close(1000, 'logout'); socket = null; }
+    simIdActivo = null;
+    intentosReconexion = 0;
+  }
+
+  return { conectar, desconectar };
+})();
+
+/**
+ * Maneja los eventos recibidos por WebSocket.
+ * Añade nuevos eventos aquí sin tocar el resto de la aplicación.
+ *
+ * @param {string} evento  Nombre del evento (ej. 'ronda_calculada')
+ * @param {Object} datos   Payload del evento
+ */
+function manejarEventoWS(evento, datos = {}) {
+  switch (evento) {
+
+    case 'conectado':
+      // Confirmación de conexión — silencioso
+      break;
+
+    case 'pong':
+      // Respuesta de heartbeat — silencioso
+      break;
+
+    case 'ronda_calculada': {
+      // ── Notificación principal: el profesor ejecutó la ronda ──────────────
+      const { ronda, lider, equiposSimulados, mensaje } = datos;
+
+      // Toast persistente (5 segundos) con más visibilidad
+      toastWS(
+        `⚡ Ronda ${ronda} calculada` + (equiposSimulados ? ` — ${equiposSimulados} equipos` : '') +
+        (lider ? ` · Líder: ${lider.equipo}` : ''),
+        'success',
+        5000
+      );
+
+      // Si el usuario es un equipo, actualizar su dashboard automáticamente
+      if (state.me?.rol === 'equipo') {
+        // Pequeño delay para que el servidor termine de escribir en la BD
+        setTimeout(() => {
+          loadHojaDecision?.().catch(() => {});
+          loadResultados?.().catch(() => {});
+        }, 1200);
+      }
+
+      // Si el usuario es admin/profesor, refrescar el dashboard
+      if (state.me?.rol === 'superadmin' || state.me?.rol === 'profesor') {
+        setTimeout(() => loadAdminDashboard?.().catch(() => {}), 1200);
+      }
+      break;
+    }
+
+    case 'ronda_abierta': {
+      const { ronda } = datos;
+      toastWS(`🟢 Ronda ${ronda} abierta — ya puedes ingresar tus decisiones`, 'info', 5000);
+      if (state.me?.rol === 'equipo') {
+        setTimeout(() => loadHojaDecision?.().catch(() => {}), 800);
+      }
+      break;
+    }
+
+    case 'presim_disponible': {
+      toastWS('📊 Pre-simulación disponible — revisa las proyecciones antes de confirmar', 'info', 6000);
+      break;
+    }
+
+    default:
+      console.log('[ws] Evento no manejado:', evento, datos);
+  }
+}
+
+/**
+ * Toast especial para eventos WebSocket: más grande, dura más y tiene botón de cierre.
+ * A diferencia del toast() estándar, no usa el elemento #toast porque queremos
+ * que coexistan con los toasts normales.
+ */
+function toastWS(msg, tipo = 'success', duracion = 5000) {
+  // Reutilizar el sistema de toast existente si está disponible
+  if (typeof toast === 'function') {
+    toast(msg, tipo);
+    return;
+  }
+  // Fallback: crear un div temporal
+  const el = document.createElement('div');
+  el.style.cssText =
+    'position:fixed;bottom:20px;left:50%;transform:translateX(-50%);' +
+    'background:#1e293b;color:#f8fafc;padding:12px 20px;border-radius:8px;' +
+    'font-size:14px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);max-width:420px;text-align:center';
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), duracion);
+}
+
+
+// ── Utilidades globales de contraseña ──────────────────────
+window.toggleInputPw = (inputId, btn) => {
+  const inp = document.getElementById(inputId);
+  if (!inp) return;
+  const isHidden = inp.type === 'password';
+  inp.type = isHidden ? 'text' : 'password';
+  btn.textContent = isHidden ? '🔒' : '👁';
+  btn.title = isHidden ? 'Ocultar' : 'Mostrar/ocultar';
+};
+
+// ── Toast ──────────────────────────────────────────────────
+
+// ── API ────────────────────────────────────────────────────
+async function api(method, url, body) {
+  const opts = { method, headers:{'Content-Type':'application/json'} };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(url, opts);
+  const data = await r.json();
+  if (!r.ok) {
+    // status y data viajan con el error: la hoja distingue el 409 de versión (pendiente N.º 10).
+    const err = new Error(data.error || 'Error de red');
+    err.status = r.status; err.data = data;
+    // Sesión cerrada por otro integrante o vencida: llevar al login con el mensaje.
+    if (r.status === 401 && (data.motivo === 'otro_dispositivo' || data.motivo === 'vencida')) sesionTerminada(data.error);
+    throw err;
+  }
+  return data;
+}
+
+// ── Sesión terminada (sesión única por equipo / sesión vencida) ─────────────
+// Sin cambios sin guardar en la hoja: directo al login con el mensaje. Con cambios sin
+// guardar: aviso fijo arriba y la hoja visible (para que copien lo escrito), Guardar y
+// Enviar deshabilitados; el login queda a un clic, con confirmación. Nada se guarda en el
+// navegador: al reingresar se ve lo último guardado por el equipo.
+let sesionTerminadaMostrada = false;
+function sesionTerminada(mensaje) {
+  if (sesionTerminadaMostrada) return;
+  sesionTerminadaMostrada = true;
+  try { wsClient.desconectar(); } catch {}
+  const hayCambios = typeof hojaTieneCambiosSinGuardar !== 'undefined' && hojaTieneCambiosSinGuardar
+    && !!document.querySelector('#hojaContent [data-hoja-field]');
+  if (!hayCambios) { irAlLoginConMensaje(mensaje); return; }
+  const div = document.createElement('div');
+  div.id = 'avisoSesionTerminada';
+  div.setAttribute('role', 'alert');
+  div.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:9999;padding:12px 16px;background:var(--bg2);'
+    + 'border-bottom:3px solid var(--accent4);color:var(--text);font-size:.88rem;line-height:1.5;'
+    + 'display:flex;gap:12px;flex-wrap:wrap;align-items:center;box-shadow:0 4px 16px rgba(0,0,0,.4)';
+  const txt = document.createElement('span');
+  txt.style.flex = '1 1 320px';
+  const fuerte = document.createElement('strong');
+  fuerte.textContent = '⚠ ' + mensaje;
+  txt.append(fuerte, document.createTextNode(' Tienes cambios sin guardar en esta pantalla: anótalos antes de salir, no se guardaron.'));
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'btn btn-ghost btn-sm'; btn.textContent = 'Ir al inicio de sesión';
+  btn.addEventListener('click', () => {
+    if (!confirm('Se perderán los cambios de esta pantalla. ¿Ir al inicio de sesión?')) return;
+    irAlLoginConMensaje(mensaje);
+  });
+  div.append(txt, btn);
+  document.body.appendChild(div);
+  ['btnHojaGuardar', 'btnHojaEnviar'].forEach(id => { const b = document.getElementById(id); if (b) b.disabled = true; });
+}
+function irAlLoginConMensaje(mensaje) {
+  document.getElementById('avisoSesionTerminada')?.remove();
+  if (typeof hojaTieneCambiosSinGuardar !== 'undefined') hojaTieneCambiosSinGuardar = false;
+  state = { me:null, ref:null, decisiones:null, resultados:null };
+  showScreen('screen-login');
+  const pass = document.getElementById('loginPass'); if (pass) pass.value = '';
+  const errEl = document.getElementById('loginError'); if (errEl) errEl.textContent = mensaje;
+  sesionTerminadaMostrada = false;
+}
+
+// ── Screens ────────────────────────────────────────────────
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => {
+    s.style.display = 'none';
+    s.classList.add('hidden');
+  });
+  const s = document.getElementById(id);
+  s.style.display = 'flex';
+  s.classList.remove('hidden');
+}
+
+// ── Nav (views inside a screen) ────────────────────────────
+function setupNav(screenId) {
+  const screen = document.getElementById(screenId);
+  screen.querySelectorAll('.nav-item[data-view]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      screen.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      screen.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+      document.getElementById(btn.dataset.view)?.classList.add('active');
+      const titles = {
+        'admin-simulaciones':'Simulaciones', 'admin-dashboard':'Dashboard', 'admin-equipos':'Equipos',
+        'admin-rondas':'Control de Rondas', 'admin-resultados':'Resultados',
+        'admin-mercado':'Mercado', 'admin-parametros':'Parámetros',
+        'admin-segmentos':'Segmentos',
+        'eq-hoja':'Hoja de Decisión', 'eq-financiero':'Estados Financieros',
+        'eq-resultados':'KPIs', 'eq-gerencia':'Gerencia General', 'eq-inventarios':'Mis Inventarios', 'eq-creditos':'Mis Créditos', 'eq-reportes':'Investigación y Ranking',
+        'eq-noticias':'Noticias del Macroentorno',
+        'admin-creditos':'Reporte de Créditos', 'admin-afinidad':'Matriz de Afinidad', 'admin-competencia':'Competencia Externa',
+        'admin-shocks':'Shocks de Mercado',
+        'eq-fase0':'Mi Empresa',
+        'admin-fase0':'Fase 0',
+        'admin-manual':'Manual del Profesor',
+      };
+      const tt = document.getElementById(screenId === 'screen-admin' ? 'adminTopTitle' : 'equipoTopTitle');
+      if (tt) tt.textContent = titles[btn.dataset.view] || '';
+      if (btn.dataset.view === 'admin-simulaciones') loadAdminSimulaciones();
+      if (btn.dataset.view === 'eq-fase0') window.loadEquipoFase0?.();
+      if (btn.dataset.view === 'eq-hoja') loadHojaDecision();
+      if (btn.dataset.view === 'eq-financiero') window.loadEquipoFinanciero?.();
+      if (btn.dataset.view === 'eq-resultados') window.loadEquipoResultados?.();
+      if (btn.dataset.view === 'eq-gerencia') window.loadEquipoGerencia?.();
+      if (btn.dataset.view === 'eq-inventarios') loadEquipoInventarios();
+      if (btn.dataset.view === 'eq-creditos') loadEquipoCreditos();
+      if (btn.dataset.view === 'eq-reportes') window.loadEquipoReportes?.();
+      if (btn.dataset.view === 'eq-noticias') window.loadEquipoNoticias?.();
+      if (btn.dataset.view === 'eq-dashboard') loadEquipoDashboard();
+      if (btn.dataset.view === 'admin-afinidad') window.loadAdminAfinidad?.();
+      if (btn.dataset.view === 'admin-competencia') window.loadAdminCompetencia?.();
+      if (btn.dataset.view === 'admin-creditos') window.loadAdminCreditos?.();
+      if (btn.dataset.view === 'admin-dashboard') window.loadAdminDashboard?.();
+      if (btn.dataset.view === 'admin-equipos') {
+        if (typeof loadAdminEquipos === 'function') loadAdminEquipos();
+        else loadAdminSimulaciones(); // fallback
+      }
+      if (btn.dataset.view === 'admin-inventarios') loadAdminInventarios();
+      if (btn.dataset.view === 'admin-resultados') window.loadAdminResultados?.();
+      if (btn.dataset.view === 'admin-mercado') window.loadAdminMercado?.();
+      if (btn.dataset.view === 'admin-parametros') window.loadAdminParametros?.();
+      if (btn.dataset.view === 'admin-segmentos') window.loadAdminSegmentos?.();
+      if (btn.dataset.view === 'admin-shocks') window.loadAdminShocks?.();
+      if (btn.dataset.view === 'admin-fase0') window.loadAdminFase0?.();
+      if (btn.dataset.view === 'admin-profesores') loadAdminProfesores();
+      if (btn.dataset.view === 'eq-manual') { buildManual(); }
+      if (btn.dataset.view === 'admin-manual') { buildManualProfesor(); }
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════════
+//  LOGIN
+// ═══════════════════════════════════════════════════════════
+function initLogin() {
+  document.getElementById('loginId').addEventListener('keydown', e => e.key==='Enter' && doLogin());
+  document.getElementById('loginPass').addEventListener('keydown', e => e.key==='Enter' && doLogin());
+  document.getElementById('loginCodigo').addEventListener('keydown', e => e.key==='Enter' && doLogin());
+  document.getElementById('btnLogin').addEventListener('click', doLogin);
+  const btnManual = document.getElementById('btnVerManualLogin');
+  if (btnManual) btnManual.addEventListener('click', buildManual);
+  initRegistroUI();
+  initRecuperarUI();
+}
+
+async function doLogin() {
+  const id     = document.getElementById('loginId').value.trim();
+  const pass   = document.getElementById('loginPass').value;
+  const codigo = (document.getElementById('loginCodigo')?.value || '').trim().toUpperCase();
+  const errEl  = document.getElementById('loginError');
+  const hintEl = document.getElementById('loginHint');
+  errEl.textContent = '';
+  if (hintEl) hintEl.style.display = 'none';
+  const btn = document.getElementById('btnLogin');
+  btn.textContent = 'Ingresando...'; btn.disabled = true;
+  try {
+    const data = await api('POST','/auth/login',{id,password:pass,codigoSimulacion:codigo});
+    state.me = data;
+    wsClient.conectar(data.simulacionId || state.currentSimId);  // ← NUEVA LÍNEA
+    if (data.rol === 'admin' || data.rol === 'superadmin' || data.rol === 'profesor') await initAdmin();
+    else await initEquipo();
+  } catch(e) {
+    errEl.textContent = e.message;
+    // BUG #5 CORREGIDO: hint contextual si el identificador no parece email
+    if (hintEl && !id.includes('@') && e.message.toLowerCase().includes('contraseña')) {
+      hintEl.textContent = '💡 ¿Eres profesor? Intenta ingresar con tu correo electrónico.';
+      hintEl.style.display = 'block';
+    }
+  } finally {
+    btn.textContent = 'Ingresar →'; btn.disabled = false;
+  }
+}
+
+// ── Registro ───────────────────────────────────────────────
+let numMiembros = 0;
+
+function buildMiembroRow(idx) {
+  return `
+    <div class="miembro-row" id="miembro_${idx}">
+      <div class="miembro-header">
+        <span class="miembro-num">Integrante ${idx + 1}</span>
+        ${idx > 0 ? `<button class="btn btn-ghost btn-sm btn-remove-miembro" data-idx="${idx}">✕ Quitar</button>` : ''}
+      </div>
+      <div class="miembro-grid">
+        <div class="form-group">
+          <label class="form-label">Apellido Paterno <span class="req">*</span></label>
+          <input class="form-input" data-miembro="${idx}" data-campo="apellidoPaterno" placeholder="Ej: García"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Apellido Materno <span class="req">*</span></label>
+          <input class="form-input" data-miembro="${idx}" data-campo="apellidoMaterno" placeholder="Ej: López"/>
+        </div>
+        <div class="form-group" style="grid-column:span 2">
+          <label class="form-label">Nombres <span class="req">*</span></label>
+          <input class="form-input" data-miembro="${idx}" data-campo="nombres" placeholder="Ej: Juan Carlos"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Teléfono</label>
+          <input class="form-input" data-miembro="${idx}" data-campo="telefono" placeholder="Ej: 70012345" type="tel"/>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Nro. de Registro <span class="req">*</span></label>
+          <input class="form-input" data-miembro="${idx}" data-campo="nroRegistro" placeholder="Ej: 20210345"/>
+        </div>
+      </div>
+    </div>`;
+}
+
+function addMiembroRow() {
+  if (numMiembros >= 5) { toast('Máximo 5 integrantes por equipo', 'info'); return; }
+  const container = document.getElementById('miembrosContainer');
+  const div = document.createElement('div');
+  div.innerHTML = buildMiembroRow(numMiembros);
+  container.appendChild(div.firstElementChild);
+  numMiembros++;
+  // bind remove buttons
+  container.querySelectorAll('.btn-remove-miembro').forEach(btn => {
+    btn.onclick = () => {
+      document.getElementById(`miembro_${btn.dataset.idx}`)?.remove();
+    };
+  });
+}
+
+function getMiembrosData() {
+  const container = document.getElementById('miembrosContainer');
+  const rows = container.querySelectorAll('.miembro-row');
+  return Array.from(rows).map(row => {
+    const get = campo => row.querySelector(`[data-campo="${campo}"]`)?.value?.trim() || '';
+    return {
+      apellidoPaterno: get('apellidoPaterno'),
+      apellidoMaterno: get('apellidoMaterno'),
+      nombres:         get('nombres'),
+      telefono:        get('telefono'),
+      nroRegistro:     get('nroRegistro'),
+    };
+  });
+}
+
+// Pantalla de confirmación de credenciales post-registro
+function showCredencialesConfirmacion(nombre, loginNombre, passwordTexto, onContinue) {
+  const card = document.getElementById('cardRegistro');
+  card.innerHTML = `
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:48px;margin-bottom:8px">✅</div>
+      <h2 style="font-size:1.1rem;font-weight:700;color:var(--accent5)">¡Equipo registrado!</h2>
+      <p style="font-size:.84rem;color:var(--text2);margin-top:6px">${nombre}</p>
+    </div>
+
+    <div style="background:rgba(255,209,102,.08);border:2px solid rgba(255,209,102,.4);border-radius:var(--r-lg);padding:20px;margin-bottom:16px">
+      <p style="font-family:var(--font-mono);font-size:.68rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1.5px;margin-bottom:12px">⚠ GUARDA ESTOS DATOS — LOS NECESITAS PARA REINGRESAR</p>
+
+      <div style="margin-bottom:12px">
+        <label style="font-size:.74rem;color:var(--text3);display:block;margin-bottom:4px">Para ingresar usa:</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <input readonly style="flex:1;padding:8px 12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--accent3);font-family:var(--font-mono);font-size:.9rem;font-weight:700" value="${loginNombre}" id="credNombre"/>
+          <button class="btn btn-ghost btn-sm" onclick="copiarCred('credNombre','nombre')">📋</button>
+        </div>
+        <p style="font-size:.7rem;color:var(--text3);margin-top:4px">Puedes ingresar con el nombre de tu equipo</p>
+      </div>
+
+      <div>
+        <label style="font-size:.74rem;color:var(--text3);display:block;margin-bottom:4px">Contraseña:</label>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="pw-input-wrap" style="flex:1">
+            <input readonly id="credPass" type="password" style="width:100%;padding:8px 36px 8px 12px;background:var(--bg3);border:1px solid var(--border2);border-radius:var(--r);color:var(--text);font-family:var(--font-mono);font-size:.9rem" value="${passwordTexto}"/>
+            <button type="button" class="btn-eye-input" onclick="toggleInputPw('credPass',this)">👁</button>
+          </div>
+          <button class="btn btn-ghost btn-sm" onclick="copiarCred('credPass','contraseña')">📋</button>
+        </div>
+      </div>
+    </div>
+
+    <p style="font-size:.78rem;color:var(--text3);text-align:center;margin-bottom:16px">
+      Anota o fotografía estos datos ahora.<br>El profesor también puede verlos en su panel de administración.
+    </p>
+
+    <button class="btn btn-success btn-full" id="btnEntrarSimulador">Entrar al Simulador →</button>
+  `;
+
+  document.getElementById('btnEntrarSimulador').addEventListener('click', () => {
+    onContinue();
+  });
+}
+
+window.copiarCred = (inputId, label) => {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  const val = el.value;
+  navigator.clipboard?.writeText(val).then(() => {
+    toast(`✓ ${label} copiado al portapapeles`, 'success');
+  }).catch(() => {
+    // fallback para contextos sin clipboard API
+    el.type = 'text';
+    el.select();
+    document.execCommand('copy');
+    toast(`✓ ${label} copiado`, 'success');
+  });
+};
+function initRegistroUI() {
+  // Mostrar/ocultar cards
+  document.getElementById('btnIrRegistro').addEventListener('click', () => {
+    document.getElementById('cardLogin').style.display = 'none';
+    document.getElementById('cardRegistro').style.display = 'block';
+    if (numMiembros === 0) { addMiembroRow(); } // primer integrante
+  });
+  document.getElementById('btnVolverLogin').addEventListener('click', () => {
+    document.getElementById('cardRegistro').style.display = 'none';
+    document.getElementById('cardLogin').style.display = 'block';
+  });
+  document.getElementById('btnAgregarMiembro').addEventListener('click', addMiembroRow);
+  document.getElementById('btnRegistrar').addEventListener('click', doRegistro);
+  document.getElementById('regPassword').addEventListener('keydown', e => e.key==='Enter' && doRegistro());
+}
+
+// ── Recuperar contraseña (Feature 2 — pregunta de seguridad) ───────
+function mostrarCardRecuperar() {
+  document.getElementById('cardLogin').style.display = 'none';
+  document.getElementById('cardRegistro').style.display = 'none';
+  document.getElementById('cardRecuperar').style.display = 'block';
+}
+
+function initRecuperarUI() {
+  document.getElementById('btnIrRecuperar').addEventListener('click', (e) => {
+    e.preventDefault();
+    mostrarCardRecuperar();
+  });
+  document.getElementById('btnVolverLoginDesdeRecuperar').addEventListener('click', () => {
+    document.getElementById('cardRecuperar').style.display = 'none';
+    document.getElementById('cardLogin').style.display = 'block';
+  });
+  document.getElementById('btnBuscarPregunta').addEventListener('click', async () => {
+    const email = document.getElementById('recEmail').value.trim();
+    const errEl = document.getElementById('recError');
+    errEl.textContent = '';
+    if (!email) { errEl.textContent = 'Ingresa tu correo electrónico.'; return; }
+    try {
+      const { pregunta } = await api('GET', `/auth/recuperar-pregunta?email=${encodeURIComponent(email)}`);
+      document.getElementById('recPreguntaTexto').textContent = pregunta;
+      document.getElementById('recPreguntaWrap').style.display = 'block';
+    } catch (e) {
+      errEl.textContent = e.message;
+      document.getElementById('recPreguntaWrap').style.display = 'none';
+    }
+  });
+  document.getElementById('btnConfirmarRecuperar').addEventListener('click', async () => {
+    const email           = document.getElementById('recEmail').value.trim();
+    const respuesta        = document.getElementById('recRespuesta').value;
+    const nuevaContrasena  = document.getElementById('recNueva').value;
+    const errEl = document.getElementById('recError');
+    const btn   = document.getElementById('btnConfirmarRecuperar');
+    errEl.textContent = '';
+    if (!respuesta || !nuevaContrasena) { errEl.textContent = 'Completa la respuesta y la nueva contraseña.'; return; }
+    if (nuevaContrasena.length < 4) { errEl.textContent = 'La nueva contraseña debe tener al menos 4 caracteres.'; return; }
+    btn.disabled = true; btn.textContent = 'Restableciendo...';
+    try {
+      await api('POST', '/auth/recuperar', { email, respuesta, nuevaContrasena });
+      toast('Contraseña restablecida. Ya puedes ingresar.', 'success');
+      document.getElementById('cardRecuperar').style.display = 'none';
+      document.getElementById('cardLogin').style.display = 'block';
+      document.getElementById('loginId').value = email;
+      document.getElementById('loginPass').value = '';
+    } catch (e) {
+      errEl.textContent = e.message;
+    } finally {
+      btn.disabled = false; btn.textContent = 'Restablecer contraseña';
+    }
+  });
+}
+
+// ── Validar código de simulación en tiempo real ─────────────
+let _codigoTimer = null;
+window.validarCodigo = (val) => {
+  const el = document.getElementById('codigoStatus');
+  if (!el) return;
+  clearTimeout(_codigoTimer);
+  if (val.length < 4) { el.textContent = ''; return; }
+  _codigoTimer = setTimeout(async () => {
+    try {
+      const r = await api('POST','/auth/validar-codigo',{codigo:val});
+      el.innerHTML = r.valido
+        ? `<span style="color:var(--accent5)">✓ Simulación encontrada: <strong>${r.nombre}</strong></span>`
+        : `<span style="color:var(--accent4)">✗ Código no válido o simulación archivada</span>`;
+    } catch { el.textContent = ''; }
+  }, 400);
+};
+
+async function doRegistro() {
+  const errEl = document.getElementById('registroError');
+  errEl.textContent = '';
+  const nombreEquipo    = document.getElementById('regNombreEquipo').value.trim();
+  const password        = document.getElementById('regPassword').value;
+  const passwordConf    = document.getElementById('regPasswordConfirm').value;
+  const codigoSimulacion= (document.getElementById('regCodigo')?.value||'').trim().toUpperCase();
+  const miembros        = getMiembrosData();
+
+  if (!nombreEquipo)             return errEl.textContent = 'El nombre del equipo es requerido.';
+  if (!password)                 return errEl.textContent = 'La contraseña es requerida.';
+  if (password.length < 4)       return errEl.textContent = 'La contraseña debe tener al menos 4 caracteres.';
+  if (password !== passwordConf) return errEl.textContent = 'Las contraseñas no coinciden.';
+  if (!codigoSimulacion)         return errEl.textContent = 'El código de simulación es requerido. Solicítalo a tu profesor.';
+
+  const btn = document.getElementById('btnRegistrar');
+  btn.textContent = 'Registrando...'; btn.disabled = true;
+  try {
+    const data = await api('POST', '/auth/registro', { nombreEquipo, miembros, password, codigoSimulacion });
+    state.me = data;
+    showCredencialesConfirmacion(data.nombre, data.nombre, data.passwordPlain || password, () => {
+      initEquipo();
+    });
+  } catch(e) {
+    errEl.textContent = e.message;
+    btn.textContent = '✓ Registrar Equipo'; btn.disabled = false;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+//  ADMIN
+// ═══════════════════════════════════════════════════════════
+async function initAdmin() {
+  showScreen('screen-admin');
+  setupNav('screen-admin');
+  document.getElementById('btnAdminLogout').addEventListener('click', doLogout);
+  document.getElementById('btnCambiarContrasena').addEventListener('click', toggleCardCambiarContrasena);
+  // Configurar recuperación: solo superadmin (coincide con needSuperAdmin() en
+  // POST /auth/configurar-recuperacion — oculto acá es defensa en profundidad
+  // visual, la protección real es del servidor).
+  if (state.me?.rol === 'superadmin') {
+    const btnRec = document.getElementById('btnConfigurarRecuperacion');
+    btnRec.style.display = 'block';
+    btnRec.addEventListener('click', toggleCardConfigurarRecuperacion);
+  }
+
+  // Restaurar sim activa desde la sesión del servidor
+  try {
+    const me = await api('GET', '/auth/me');
+    if (me?.simulacionId) {
+      state.currentSimId    = me.simulacionId;
+      state.currentSimNombre = me.simNombre || me.simulacionId;
+      state.ref = await api('GET', '/admin/config');
+      const badge = document.getElementById('simBadge');
+      if (badge && state.currentSimNombre) badge.textContent = `📊 ${state.currentSimNombre}`;
+    }
+  } catch {}
+
+  await loadAdminSimulaciones();
+}
+
+// ── Admin Simulaciones ─────────────────────────────────────
+
+async function doRecalcularBalance() {
+  if (!confirm(
+  '⚠️ RE-SIMULACIÓN COMPLETA — todas las rondas\n\n' +
+  'Esta operación re-ejecuta el motor de cálculo para R1 hasta la última ronda simulada.\n\n' +
+  'Recalcula con los parámetros ACTUALES (incluyendo proveedores y costos de MP).\n\n' +
+  '• Decisiones originales de cada equipo se conservan\n' +
+  '• Financiero propagado (caja, deuda, inventario) se recalcula en cadena\n' +
+  '• Shocks históricos se respetan\n' +
+  '• Reportes de investigación se regeneran\n\n' +
+  'Los resultados históricos cambiarán. ¿Confirmas?'
+)) return;
+  try {
+    const btn = document.getElementById('btnRecalcularBalance');
+    if (btn) { btn.disabled = true; btn.textContent = '⏳ Recalculando...'; }
+    const r = await api('POST', '/admin/recalcular-balance');
+    const msgToast = r.errores?.length
+      ? `⚠️ Re-simulación: ${r.rondas} rondas OK · ${r.errores.length} error(es)`
+      : `✅ Re-simulación completa: ${r.rondas} rondas · ${r.empresas} registros`;
+    toast(msgToast, r.errores?.length ? 'warning' : 'success');
+    if (r.errores?.length) console.warn('[recalc] Errores:', r.errores);
+    await loadAdminRondas();
+  } catch(e) {
+    toast(e.message, 'error');
+    const btn = document.getElementById('btnRecalcularBalance');
+    if (btn) { btn.disabled = false; btn.textContent = '🔄 Recalcular EF + Desglose CU — todas las rondas'; }
+  }
+}
+
+async function loadAdminRondasDirect() {
+  const el = document.getElementById('rondasContent');
+  if (!el) return;
+  try {
+    el.innerHTML = '<p style="color:var(--text3);padding:20px">Cargando historial de rondas...</p>';
+    const raw  = await api('GET', '/admin/historial');
+    const hist = Array.isArray(raw) ? raw : (raw?.rondas || raw?.historial || []);
+    if (!hist?.length) {
+      el.innerHTML = '<p style="color:var(--text3);padding:20px">Sin rondas ejecutadas aún.</p>';
+      return;
+    }
+    const rows = hist.map(h => `
+      <tr>
+        <td style="text-align:center;font-weight:700;color:var(--accent3)">T${h.ronda}</td>
+        <td style="text-align:center">
+          <span class="badge ${h.estado==='calculada'||h.estado==='simulated'?'badge-ok':'badge-warn'}">${h.estado}</span>
+        </td>
+        <td style="text-align:center">${h.enviados||'—'} / ${h.total||'—'}</td>
+        <td style="text-align:center;font-size:.78rem;color:var(--text3)">${h.ejecutadaAt ? new Date(h.ejecutadaAt).toLocaleString('es-BO') : '—'}</td>
+      </tr>`).join('');
+    el.innerHTML = '<div class="table-wrap"><table>'
+      + '<thead><tr>'
+      + '<th style="text-align:center">Trimestre</th>'
+      + '<th style="text-align:center">Estado</th>'
+      + '<th style="text-align:center">Decisiones enviadas</th>'
+      + '<th style="text-align:center">Ejecutada</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    el.innerHTML += '<div style="margin-top:20px;padding:12px 16px;background:var(--bg2);border-radius:var(--r);border:1px solid var(--border2)">'
+      + '<div style="font-size:.75rem;color:var(--text3);margin-bottom:10px">🔧 Herramientas de mantenimiento</div>'
+      + '<button class="btn btn-ghost" id="btnRecalcularBalance" onclick="doRecalcularBalance()">🔄 Recalcular EF + Desglose CU — todas las rondas</button>'
+      + '</div>';
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--accent4);padding:20px">Error: ' + e.message + '</p>';
+  }
+}
+
+async function loadAdminRondas() {
+  if (!requireSimSelected('rondasContent')) {
+    // Intentar carga directa si hay sesión activa
+    await loadAdminRondasDirect();
+    return;
+  }
+  const el = document.getElementById('rondasContent');
+  if (!el) return;
+  try {
+    el.innerHTML = '<p style="color:var(--text3);padding:20px">Cargando historial de rondas...</p>';
+    const raw  = await api('GET', '/admin/historial');
+    const hist = Array.isArray(raw) ? raw : (raw?.rondas || raw?.historial || []);
+    if (!hist?.length) {
+      el.innerHTML = '<p style="color:var(--text3);padding:20px">Sin rondas ejecutadas aún. Las rondas aparecerán aquí una vez que el profesor ejecute la simulación.</p>';
+      return;
+    }
+    const rows = hist.map(h => `
+      <tr>
+        <td style="text-align:center;font-weight:700;color:var(--accent3)">T${h.ronda}</td>
+        <td style="text-align:center">
+          <span class="badge ${h.estado==='calculada'||h.estado==='simulated'?'badge-ok':'badge-warn'}">${h.estado}</span>
+        </td>
+        <td style="text-align:center">${h.enviados||'—'} / ${h.total||'—'}</td>
+        <td style="text-align:center;font-size:.78rem;color:var(--text3)">${h.ejecutadaAt ? new Date(h.ejecutadaAt).toLocaleString('es-BO') : '—'}</td>
+      </tr>`).join('');
+    el.innerHTML = '<div class="table-wrap"><table>'
+      + '<thead><tr>'
+      + '<th style="text-align:center">Trimestre</th>'
+      + '<th style="text-align:center">Estado</th>'
+      + '<th style="text-align:center">Decisiones enviadas</th>'
+      + '<th style="text-align:center">Ejecutada</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+    // Botón Recalcular Estados Financieros
+    el.innerHTML += '<div style="margin-top:20px;padding:12px 16px;background:var(--bg2);border-radius:var(--r);border:1px solid var(--border2)">'
+      + '<div style="font-size:.75rem;color:var(--text3);margin-bottom:10px">'
+      + '🔧 Herramientas de mantenimiento de datos</div>'
+      + '<button class="btn btn-ghost" id="btnRecalcularBalance" onclick="doRecalcularBalance()">'
+      + '🔄 Recalcular EF + Desglose CU — todas las rondas</button>'
+      + '<div style="font-size:.7rem;color:var(--text3);margin-top:6px;line-height:1.5">'
+      + 'Re-ejecuta el motor para todas las rondas con los parámetros actuales. '
+      + 'Conserva decisiones originales y shocks. '
+      + 'Útil cuando cambias costos de MP, proveedores o parámetros de industria.</div>'
+      + '</div>';
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--accent4);padding:20px">Error: ' + e.message + '</p>';
+  }
+}
+
+async function loadAdminResultados(rondaVer) {
+  if (!requireSimSelected('adminResultadosContent')) return;
+  const el = document.getElementById('adminResultadosContent');
+  if (!el) return;
+  try {
+    el.innerHTML = '<p style="color:var(--text3);padding:20px">Cargando resultados...</p>';
+    const ronda = await api('GET', '/admin/ronda');
+    let current = ronda?.currentRound || 0;
+
+    // Buscar ultima ronda con resultados reales
+    const current2 = ronda?.currentRound || 0;
+    let ultimaSimulada = 0;
+    for (let i = current2; i >= 1; i--) {
+      try {
+        const chk = await api('GET', '/admin/resultados/' + i);
+        if (chk && chk.resultados && chk.resultados.length) { ultimaSimulada = i; break; }
+      } catch(eignore) {}
+    }
+
+    if (!ultimaSimulada) {
+      el.innerHTML = '<p style="color:var(--text3);padding:20px">Sin rondas ejecutadas aún.</p>';
+      return;
+    }
+
+    const n = (rondaVer && rondaVer >= 1 && rondaVer <= current2) ? rondaVer : ultimaSimulada;
+
+    const rd = await api('GET', '/admin/resultados/' + n);
+    if (!rd?.resultados?.length) {
+      el.innerHTML = '<p style="color:var(--text3);padding:20px">Sin resultados para el trimestre ' + n + '.</p>';
+      return;
+    }
+
+    // Selector de rondas
+    const opcionesRondas = Array.from({length: ultimaSimulada}, (_,i) => i+1)
+      .map(r => `<option value="${r}" ${r===n?'selected':''}>Ronda ${r}</option>`)
+      .join('');
+    const selector = `<div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;flex-wrap:wrap">
+      <label style="font-size:.82rem;color:var(--text3)">Ver resultados de:</label>
+      <select id="selectorRondaResultados" class="form-input" style="width:auto;padding:4px 10px;font-size:.85rem"
+        onchange="loadAdminResultados(+this.value)">
+        ${opcionesRondas}
+      </select>
+      <span style="font-size:.78rem;color:var(--text3)">Última simulada: Ronda ${ultimaSimulada}</span>
+    </div>`;
+
+    el.innerHTML = selector + buildAdminResultsHTML(rd);
+    if (typeof renderAdminCharts === 'function') setTimeout(renderAdminCharts, 200);
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--accent4);padding:20px">Error: ' + e.message + '</p>';
+    console.error('loadAdminResultados:', e);
+  }
+}
+
+async function loadAdminSimulaciones() {
+
+  let plantillasDisponibles = [];
+  try {
+    const data = await api('GET', '/admin/plantillas');
+    plantillasDisponibles = data.plantillas || [];
+  } catch {}
+  let profesoresDisponibles = [];
+  try {
+    profesoresDisponibles = await api('GET', '/admin/usuarios');
+  } catch {}
+  const plantillasOpts = plantillasDisponibles
+    .filter(p => p !== 'jaboncillos_v1')
+    .map(p => {
+      const lbl = p === 'Calzados_COM540_1_2026_V1'
+        ? 'Calzados Especializados — COM540 2026 V1'
+        : p.replace(/_v\d+$/, '').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      const sel = p === 'Calzados_COM540_1_2026_V1' ? ' selected' : '';
+      return `<option value="${p}"${sel}>${lbl}</option>`;
+    })
+    .join('');
+
+  const el = document.getElementById('adminSimulacionesContent');
+  if (!el) return;
+  el.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3)">Cargando...</div>`;
+  try {
+    const sims = await api('GET','/admin/simulaciones');
+    // Columna y filtro de profesor: solo tienen sentido si ownerNombre llegó en
+    // AL MENOS una fila — para un profesor normal, el backend nunca lo resuelve
+    // (ownerNombre queda undefined en todas sus filas), así que esta condición es
+    // falsa y ninguna de las 2 piezas se renderiza. Nada nuevo visible para él.
+    const hayProfesores = sims.some(s => s.ownerNombre);
+    const profesoresUnicos = hayProfesores
+      ? [...new Set(sims.map(s => s.ownerNombre).filter(Boolean))].sort()
+      : [];
+    const filtroProfesor = state.filtroProfesorSim || '';
+    const simsFiltradas = filtroProfesor
+      ? sims.filter(s => s.ownerNombre === filtroProfesor)
+      : sims;
+    const activas   = simsFiltradas.filter(s=>s.estado==='activa');
+    const archivadas = simsFiltradas.filter(s=>s.estado==='archivada');
+
+    const simCard = (sim) => {
+      const stateColors = {pending:'var(--text3)',open:'var(--accent5)',locked:'var(--accent3)','pre-sim':'var(--accent3)',simulated:'var(--accent2)'};
+      const stateLabels = {pending:'⏸ Pendiente',open:'🟢 Abierta',locked:'🔒 Cerrada','pre-sim':'📊 Pre-sim','simulated':'✅ Simulada'};
+      return `
+        <div class="result-round-card" style="margin-bottom:14px">
+          <div class="result-round-header" style="justify-content:space-between;flex-wrap:wrap;gap:8px">
+            <div>
+              <h3 style="margin:0">${sim.nombre}</h3>
+              ${sim.descripcion?`<div style="font-size:.76rem;color:var(--text3);margin-top:2px">${sim.descripcion}</div>`:''}
+              ${sim.ownerNombre?`<div style="font-size:.72rem;color:var(--accent2);margin-top:2px">👤 ${sim.ownerNombre}</div>`:''}
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <span class="badge ${sim.estado==='activa'?'badge-ok':'badge-pending'}">${sim.estado==='activa'?'✅ Activa':'📦 Archivada'}</span>
+              <span style="font-size:.74rem;font-family:var(--font-mono);color:${stateColors[sim.roundState]||'var(--text3)'}">${stateLabels[sim.roundState]||sim.roundState}</span>
+            </div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:0;border-top:1px solid var(--border);border-bottom:1px solid var(--border)">
+            <div style="padding:10px 16px;border-right:1px solid var(--border)"><div style="font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Equipos</div><div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;margin-top:3px">${sim.totalEquipos}</div></div>
+            <div style="padding:10px 16px;border-right:1px solid var(--border)"><div style="font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Ronda actual</div><div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;margin-top:3px">${sim.currentRound}/${sim.totalRounds}</div></div>
+            <div style="padding:10px 16px;border-right:1px solid var(--border)"><div style="font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Código de acceso</div><div style="font-family:var(--font-mono);font-size:.9rem;font-weight:700;margin-top:3px;color:var(--accent3);letter-spacing:2px">${sim.codigoAcceso||'—'}</div></div>
+            <div style="padding:10px 16px"><div style="font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px">Creada</div><div style="font-size:.78rem;margin-top:3px">${sim.creadaAt?new Date(sim.creadaAt).toLocaleDateString('es-BO'):'-'}</div></div>
+          </div>
+          <div style="padding:12px 16px;display:flex;gap:8px;flex-wrap:wrap">
+            ${sim.estado==='activa'
+              ? `<button class="btn btn-success btn-sm" onclick="seleccionarSim('${sim.id}','${sim.nombre.replace(/'/g,"\\'")}')">▶ Acceder a esta simulación</button>
+                 <button class="btn btn-ghost btn-sm" onclick="copiarCodigo('${sim.codigoAcceso||''}')">📋 Copiar código</button>
+                 <button class="btn btn-ghost btn-sm" onclick="archivarSim('${sim.id}')">📦 Archivar</button>
+                 <button class="btn btn-ghost btn-sm" onclick="doBackupSimulacion('${sim.id}')">💾 Backup</button>
+                 <button class="btn btn-ghost btn-sm" onclick="doRestaurarSimulacion('${sim.id}')" style="color:#FFC107;border-color:rgba(255,193,7,0.4)">📂 Restaurar</button>
+                 <button class="btn btn-ghost btn-sm" onclick="eliminarSim('${sim.id}','${sim.nombre.replace(/'/g,"\\'")}')" style="color:var(--accent4)">✕ Eliminar</button>`
+              : `<button class="btn btn-ghost btn-sm" onclick="activarSim('${sim.id}')">♻ Reactivar</button>
+                 <button class="btn btn-ghost btn-sm" onclick="eliminarSim('${sim.id}','${sim.nombre.replace(/'/g,"\\'")}')" style="color:var(--accent4)">✕ Eliminar</button>`}
+          </div>
+        </div>`;
+    };
+
+    const selectorProfesor = hayProfesores ? `
+      <div style="margin-bottom:14px">
+        <label class="param-label" style="margin-right:8px">Filtrar por profesor</label>
+        <select class="param-input" style="width:auto;display:inline-block"
+          onchange="state.filtroProfesorSim=this.value; loadAdminSimulaciones()">
+          <option value="">Todos</option>
+          ${profesoresUnicos.map(n =>
+            `<option value="${n}" ${filtroProfesor===n?'selected':''}>${n}</option>`
+          ).join('')}
+        </select>
+      </div>` : '';
+
+    el.innerHTML = `
+      <div class="section-header">
+        <h2>🎮 Gestión de Simulaciones</h2>
+        <p>Cada simulación es un juego independiente con sus propios equipos, rondas y resultados.</p>
+      </div>
+
+      <div style="display:flex;gap:10px;margin-bottom:24px;flex-wrap:wrap">
+        <button class="btn btn-success" onclick="showCrearSimulacion()" ${esSuperAdmin() ? '' : 'disabled'}
+          title="${esSuperAdmin() ? '' : 'Solo superadmin puede crear simulaciones'}"
+          style="${esSuperAdmin() ? '' : 'cursor:not-allowed;opacity:.6'}">+ Nueva Simulación</button>
+        <button class="btn btn-ghost" onclick="loadAdminSimulaciones()">↺ Actualizar</button>
+        <button class="btn btn-ghost" onclick="doBackupTodas()">💾 Backup de todas</button>
+      </div>
+
+      ${selectorProfesor}
+
+      <div id="crearSimForm" style="display:none;background:var(--bg2);border:1px solid var(--border);border-radius:var(--r-lg);padding:20px;margin-bottom:24px">
+        <h3 style="margin:0 0 16px">Nueva Simulación</h3>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+          <div>
+            <label class="form-label">Nombre <span style="color:var(--accent4)">*</span></label>
+            <input class="form-input" id="newSimNombre" placeholder="Ej: Sección A — Mañana">
+          </div>
+          <div>
+            <label class="form-label">Rondas totales</label>
+            <input class="form-input" id="newSimRondas" type="number" min="1" max="20" value="20">
+          </div>
+          <div style="grid-column:span 2">
+            <label class="form-label">Modo de inicio</label>
+            <div style="display:flex;flex-direction:column;gap:8px;margin-top:4px">
+              <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+                <input type="radio" name="newSimModo" value="fase0" checked style="margin-top:3px"/>
+                <div>
+                  <strong>Con Fase 0 — Constitución diferenciada</strong>
+                  <div style="font-size:.72rem;color:var(--text3)">Cada equipo define su empresa antes de R1. Más realista y pedagógico.</div>
+                </div>
+              </label>
+              <label style="display:none;align-items:flex-start;gap:8px;cursor:pointer">
+                <input type="radio" name="newSimModo" value="homogeneo" disabled style="margin-top:3px"/>
+                <div>
+                  <strong>Homogéneo — Condiciones iguales</strong>
+                  <div style="font-size:.72rem;color:var(--text3)">Todos los equipos arrancan igual. Ideal para demos o cursos cortos.</div>
+                </div>
+              </label>
+              <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
+                <input type="radio" name="newSimModo" value="homogeneo_activos" style="margin-top:3px"/>
+                <div>
+                  <strong>Homogéneo con activos — Constitución con presupuesto igual</strong>
+                  <div style="font-size:.72rem;color:var(--text3)">Cada equipo elige su propia planta, vehículo, muebles, cómputo y patentes (como Fase 0). El docente fija un mismo presupuesto de caja e inversión para todos.</div>
+                </div>
+              </label>
+            </div>
+          </div>
+          <div style="grid-column:span 2">
+            <label class="form-label">Descripción (opcional)</label>
+            <input class="form-input" id="newSimDesc" placeholder="Ej: COM400A Trimestre I 2026 — Sección matutina">
+          </div>
+          <div style="grid-column:span 2">
+            <label class="form-label">Copiar parámetros de (opcional)</label>
+            <select class="form-input" id="newSimCopyFrom">
+              <option value="">— Usar parámetros por defecto —</option>
+              ${activas.map(s=>`<option value="${s.id}">${s.nombre}</option>`).join('')}
+            </select>
+          </div>
+
+            <div>
+              <label class="form-label">Industria / Plantilla</label>
+              <select class="form-input" id="newSimIndustria">
+                <option value="" disabled>— Seleccionar industria —</option>
+                ${plantillasOpts}
+              </select>
+              <div style="font-size:.72rem;color:var(--text3);margin-top:4px">
+                Define el tipo de producto, canales y segmentos del mercado.
+                Solo aplica si no copias de otra simulación.
+              </div>
+            </div>
+
+            <div>
+              <label class="form-label">Asignar a</label>
+              <select class="form-input" id="newSimAsignarA">
+                <option value="">— Para mí —</option>
+                ${profesoresDisponibles.map(p => `<option value="${p.id}">${p.nombre}</option>`).join('')}
+              </select>
+              <div style="font-size:.72rem;color:var(--text3);margin-top:4px">
+                Elegí un profesor para que esta simulación quede a su nombre. Si no elegís nada, queda asignada a vos.
+              </div>
+            </div>
+
+            </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-success" onclick="crearSimulacion()">✓ Crear Simulación</button>
+          <button class="btn btn-ghost" onclick="document.getElementById('crearSimForm').style.display='none'">Cancelar</button>
+        </div>
+      </div>
+
+      ${activas.length > 0 ? `
+        <h3 style="margin-bottom:12px">Simulaciones activas (${activas.length})</h3>
+        ${activas.map(simCard).join('')}
+      ` : '<p style="color:var(--text3);font-size:.84rem">No hay simulaciones activas. Crea una nueva para comenzar.</p>'}
+
+      ${archivadas.length > 0 ? `
+        <details style="margin-top:24px">
+          <summary style="cursor:pointer;font-weight:600;color:var(--text2);font-size:.9rem;padding:8px 0">
+            📦 Simulaciones archivadas (${archivadas.length})
+          </summary>
+          <div style="margin-top:12px">
+            ${archivadas.map(simCard).join('')}
+          </div>
+        </details>
+      ` : ''}
+    `;
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--accent4);padding:16px">${e.message}</p>`;
+  }
+}
+
+window.showCrearSimulacion = () => {
+  document.getElementById('crearSimForm').style.display = 'block';
+  document.getElementById('newSimNombre').focus();
+};
+
+window.crearSimulacion = async () => {
+  const nombre     = document.getElementById('newSimNombre').value.trim();
+  if (!nombre) return toast('El nombre es requerido', 'error');
+  const desc        = document.getElementById('newSimDesc').value.trim();
+  const totalRounds = parseInt(document.getElementById('newSimRondas').value) || 20;
+  const copyFromSimId = document.getElementById('newSimCopyFrom').value || null;
+  // NUEVO: leer industria seleccionada
+  const industria   = document.getElementById('newSimIndustria')?.value || null;
+  const modoInicio  = document.querySelector('input[name="newSimModo"]:checked')?.value || 'fase0';
+  const asignarA    = document.getElementById('newSimAsignarA')?.value || null;
+
+  try {
+    const r = await api('POST', '/admin/simulaciones', {
+      nombre,
+      descripcion:  desc,
+      totalRounds,
+      copyFromSimId,
+      industria:    copyFromSimId ? null : industria,  // ignorar plantilla si se copia de otra sim
+      modoInicio,
+      asignarA,
+    });
+    toast(`✓ Simulación creada — Código: ${r.codigoAcceso}${r.industria ? ` · Industria: ${r.industria}` : ''}`, 'success');
+    document.getElementById('crearSimForm').style.display = 'none';
+    await loadAdminSimulaciones();
+  } catch(e) { toast(e.message, 'error'); }
+};
+
+window.seleccionarSim = async (simId, nombre) => {
+  try {
+    await api('POST','/admin/seleccionar-sim',{simId});
+    state.currentSimId = simId;
+    state.currentSimNombre = nombre;
+    // Cargar config de la simulación seleccionada
+    state.ref = await api('GET','/admin/config');
+    toast(`📊 Simulación activa: ${nombre}`, 'success');
+    wsClient.conectar(simId);
+    // Actualizar badge en el header
+    const badge = document.getElementById('simBadge');
+    if (badge) badge.textContent = `📊 ${nombre}`;
+    // Ir al dashboard
+    document.querySelector('[data-view="admin-dashboard"]')?.click();
+  } catch(e) { toast(e.message,'error'); }
+};
+
+window.archivarSim = async (simId) => {
+  if (!confirm('¿Archivar esta simulación? Podrás reactivarla después.')) return;
+  try {
+    await api('POST',`/admin/simulaciones/${simId}/archivar`);
+    toast('Simulación archivada','success');
+    await loadAdminSimulaciones();
+  } catch(e) { toast(e.message,'error'); }
+};
+
+window.activarSim = async (simId) => {
+  try {
+    await api('POST',`/admin/simulaciones/${simId}/activar`);
+    toast('Simulación reactivada','success');
+    await loadAdminSimulaciones();
+  } catch(e) { toast(e.message,'error'); }
+};
+
+window.eliminarSim = async (simId, nombre) => {
+  if (!confirm(`¿ELIMINAR PERMANENTEMENTE la simulación "${nombre}"?\n\nSe eliminarán todos los equipos, rondas y resultados. Esta acción NO se puede deshacer.`)) return;
+  try {
+    await api('DELETE',`/admin/simulaciones/${simId}`);
+    toast('Simulación eliminada','success');
+    await loadAdminSimulaciones();
+  } catch(e) { toast(e.message,'error'); }
+};
+
+window.copiarCodigo = (codigo) => {
+  navigator.clipboard?.writeText(codigo).then(() => toast(`✓ Código ${codigo} copiado`,'success'))
+    .catch(() => toast(`Código: ${codigo}`,'success'));
+};
+
+// ── Admin Dashboard ────────────────────────────────────────
+// Guard: check if a simulation is selected before loading admin views
+function requireSimSelected(elId) {
+  if (!state.currentSimId) {
+    const el = document.getElementById(elId);
+    if (el) el.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">🎮</div>
+        <p style="margin-bottom:16px">Debes seleccionar una simulación primero.</p>
+        <button class="btn btn-primary" onclick="document.querySelector('[data-view=admin-simulaciones]')?.click()">
+          Ir a Gestión de Simulaciones →
+        </button>
+      </div>`;
+    return false;
+  }
+  return true;
+}
+
+// ── KPI Analysis Panel — buildAdminKPIHTML ────────────────────────────────
+// 4 tabs por rol (mismos KPIs que ve el estudiante) en formato comparativo.
+// Dependencias: eqs (array de resultados consolidados por empresa), tc() (colores)
+
+window.adminKPITab = (n, pfx) => {
+  // F7-FIX: pfx identifica la instancia correcta de los tabs KPI
+  [1,2,3,4].forEach(i => {
+    const p = document.getElementById(pfx ? pfx+'pane'+i : 'adminKPIPane'+i);
+    const b = document.getElementById(pfx ? pfx+'btn'+i  : 'btnKPI'+i);
+    if (p) p.style.display = i===n ? '' : 'none';
+    if (b) b.className    = i===n ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  });
+};
+
+
+// ── Vista estudiante por equipo (para toggle Opción B) ───────────────────────
+// Reutiliza exactamente el mismo HTML que ve el estudiante en loadEquipoFinanciero
+function buildVistaEstudiantePorEquipo(rd, tab) {
+  if (!rd.resultados?.length) return '<p style="color:var(--text3);padding:20px">Sin resultados</p>';
+  const eqs = rd.resultados;
+  const COLORS = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#EC4899'];
+  const fmt = { bs: v => 'Bs ' + Math.round(Math.abs(v||0)).toLocaleString('es'),
+                num: v => Math.round(v||0).toLocaleString('es'),
+                pct: v => ((v||0)*100).toFixed(1)+'%' };
+
+  return eqs.map((r, idx) => {
+    const color  = COLORS[idx % COLORS.length];
+    const nombre = r.equipoNombre || r.equipo || 'Equipo '+(idx+1);
+
+    // Encabezado del equipo
+    let html = '<div style="background:var(--bg2);border:0.5px solid var(--border);'
+      + 'border-left:4px solid '+color+';border-radius:var(--r);padding:16px 20px;margin-bottom:16px">'
+      + '<div style="font-weight:700;font-size:.9rem;color:'+color+';margin-bottom:14px;letter-spacing:.3px">'+nombre+'</div>';
+
+    if (tab === 'pl') {
+      // ── ER por producto (multiproducto) ──
+      if (r.productos && r.productos.length > 1) {
+        const PROD_COLORS2 = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#EC4899'];
+        const fR2 = (lbl,v,neg,tipo) => {
+          const val=neg?-(v||0):(v||0);
+          const col=tipo==='pos'?'var(--accent2)':tipo==='neg'?'var(--accent4)':'var(--text1)';
+          return '<tr><td style="padding:3px 8px;font-size:.74rem;color:var(--text2)">'+lbl+'</td>'
+            +'<td style="padding:3px 8px;text-align:right;font-family:var(--font-mono);font-size:.74rem;color:'+col+'">'
+            +(val<0?'(':'')+'Bs '+Math.round(Math.abs(val)).toLocaleString('es')+(val<0?')':'')+'</td></tr>';
+        };
+        const fRS2 = (lbl,v) => {
+          const col=(v||0)>=0?'var(--accent2)':'var(--accent4)';
+          return '<tr style="border-top:1px solid var(--border)"><td style="padding:4px 8px;font-size:.74rem;font-weight:700">'+lbl+'</td>'
+            +'<td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);font-size:.74rem;font-weight:700;color:'+col+'">'
+            +'Bs '+Math.round(v||0).toLocaleString('es')+'</td></tr>';
+        };
+        const cards2 = r.productos.map((p,i) => {
+          const col = PROD_COLORS2[i % PROD_COLORS2.length];
+          const utilColor = (p.utilidadNeta||0)>=0?'var(--accent2)':'var(--accent4)';
+          const ebit = p.ebit??((p.utilidadBruta||0)-(p.gastosOp||0));
+          const ub2       = p.utilidadBruta||0;
+          const mbColor2  = ub2>=0?'var(--accent2)':'var(--accent4)';
+          const mbPct2    = (p.ventasNetas||0)>0?(ub2/(p.ventasNetas)*100).toFixed(1)+'%':'—';
+          const mnPct2    = (p.ventasNetas||0)>0?((p.utilidadNeta||0)/(p.ventasNetas)*100).toFixed(1)+'%':'—';
+          return '<div style="background:var(--bg3);border:0.5px solid var(--border);border-top:3px solid '+col
+            +';border-radius:var(--r);padding:10px 12px;min-width:180px;flex:1">'
+            +'<div style="font-weight:700;font-size:.75rem;color:'+col+';margin-bottom:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+(p.producto||'Prod '+(i+1))+'</div>'
+            +'<table style="width:100%;border-collapse:collapse">'
+            +fR2('Ventas netas',p.ventasNetas||0,false,'neutral')
+            +fR2('(−) Costo ventas',p.costoVentas||0,true,'neg')
+            +fRS2('= Util. bruta',ub2)
+            +'<tr><td style="padding:2px 8px;font-size:.7rem;color:var(--text3)">Margen bruto</td>'
+            +'<td style="padding:2px 8px;text-align:right;font-family:var(--font-mono);font-size:.7rem;color:'+mbColor2+'">'+mbPct2+'</td></tr>'
+            +fR2('(−) Gastos op.',p.gastosOp||0,true,'neg')
+            +fRS2('= EBIT',ebit)
+            +fR2('(−) IT',p.impuestoIT||0,true,'neg')
+            +'<tr style="border-top:2px solid var(--border2)">'
+            +'<td style="padding:4px 8px;font-size:.74rem;font-weight:700">= Util. neta</td>'
+            +'<td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);font-size:.74rem;font-weight:700;color:'+utilColor+'">'
+            +'Bs '+Math.round(p.utilidadNeta||0).toLocaleString('es')+'</td></tr>'
+            +'<tr><td style="padding:2px 8px;font-size:.7rem;color:var(--text3)">Margen neto</td>'
+            +'<td style="padding:2px 8px;text-align:right;font-family:var(--font-mono);font-size:.7rem;color:'+utilColor+'">'+mnPct2+'</td></tr>'
+            +'</table></div>';
+        }).join('');
+        html += '<div style="font-family:var(--font-mono);font-size:.6rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:4px 0 8px;border-bottom:1px solid var(--border);margin-bottom:8px">📦 ER por Producto</div>'
+          +'<div style="display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px">'+cards2+'</div>'
+          +'<div style="font-family:var(--font-mono);font-size:.6rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:6px">📋 ER Consolidado</div>';
+      }
+      // ── ER consolidado ──
+      const sec = lbl => '<div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border);margin-top:4px">'+lbl+'</div>';
+      html += finRow('Precio facturado al cliente (con IVA)', r.totalFacturado||(r.ivaDebito ? Math.round(r.ivaDebito/0.13) : 0), false,'neutral') /*fix_pf_prof_v1*/
+        + finRow('(−) IVA débito fiscal (13%)', -(r.ivaDebito||0), false,'neg')
+        + finRowSub('= Ventas brutas (sin IVA)', r.ventasBrutas||0, true)
+        + finRow('(−) Comisiones canal (neto)', -(r.comisionesNeto||Math.round((r.comisiones||0)*0.87)), false,'neg')
+        + finRowSub('= Ventas netas', r.ventasNetasReal||r.ventasNetas||0, true)
+        + finRow('(−) Costo de ventas', -(r.costoVentas||0), false,'neg')
+        + finRow('    MOD — Operarios producción', -(r.pagoOperarios||r.costoOperarios||0), false,'neg')
+        + finRow('    Overhead — Gasto fijo planta', -(r.gastoFijoPlanta||0), false,'neg')
+        + finRow('    Depreciación planta', -(r.depreciacion||0), false,'neg')
+        + finRowSub('= Utilidad bruta', r.utilidadBruta||0, true)
+        + sec('(-) Gastos Comerciales')
+        + finRow('Publicidad',              -(r.gastoPublicidad||Math.round((r.publicidad||0)*0.87)),         false,'neg')
+        + finRow('Promoción',               -(r.gastoPromocion||Math.round((r.promocion||0)*0.87)),          false,'neg')
+        + finRow('Eventos',                 -(r.gastoEventos||Math.round((r.eventos||0)*0.87)),            false,'neg')
+        + finRow('Marketing en redes',      -(r.gastoMktRedes||Math.round((r.marketingRedes||0)*0.87)),     false,'neg')
+        + finRow('Relaciones públicas',     -(r.gastoRRPP||Math.round((r.relacionesPublicas||0)*0.87)), false,'neg')
+        + finRow('Fuerza de ventas',        -(r.costoVendedores||0),    false,'neg')
+        + sec('(-) Gastos Administrativos')
+        + finRow('Gastos administrativos fijos', -(r.gastoAdminFijo||0), false,'neg')
+        + sec('(-) Gastos Operativos')
+        + finRow('Almacenamiento',          -(r.costoAlmacenamiento||0),false,'neg')
+        + ((r.gastoInnovacion||0)>0 ? finRow('Innovación / desarrollo',-(r.gastoInnovacionNeto||Math.round((r.gastoInnovacion||0)*0.87)),false,'neg') : '')
+        + '<div style="height:4px;border-top:1px dashed var(--border)"></div>'
+        + finRowSub('= EBITDA', (r.ebit??0)+(r.depreciacion??0)+(r.amortizacionPatentes??0), true)
+        + finRow('(-) Depreciación', -(r.depreciacion||0), false,'neg')
+        + '<div style="height:4px;border-top:1px dashed var(--border)"></div>'
+        + finRowSub('= EBIT / Utilidad Operativa', r.ebit??0, true)
+        + sec('(-) Gastos Financieros')
+        + finRow('Intereses préstamo', -(r.interesesPrestamo||0), false,'neg')
+        + ((r.comisionApertura||0)>0 ? finRow('Comisión apertura', -(r.comisionApertura||0), false,'neg') : '')
+        + '<div style="height:4px;border-top:1px dashed var(--border)"></div>'
+        + finRowSub('= Utilidad antes de impuestos', (r.ebit??0)-(r.gastoFinanciero??0), true)
+        + sec('(-) Impuestos')
+        + finRow('IT (3% precio facturado)', -(r.impuestoIT||0), false,'neg')
+        + ((r.impuestoIUE||0)>0 ? finRow('IUE (25% utilidad gravable)', -(r.impuestoIUE||0), false,'neg') : '')
+        + '<div style="margin:8px 0;padding:8px 10px;background:rgba(59,130,246,.07);border-radius:6px;border-left:3px solid #3B82F6;font-size:.73rem;color:var(--text3);line-height:1.6">'
+        + '<strong style="color:#3B82F6">ⓘ IVA — tributo neutro (Ley 843)</strong><br>'
+        + 'Débito: '+fmt.bs(r.ivaDebito||0)+' · Crédito: '+fmt.bs(r.ivaCredito||0)+' · <strong>Neto a pagar: '+fmt.bs(r.ivaAPagar||0)+'</strong></div>'
+        + '<div style="height:4px;border-top:2px solid var(--border2)"></div>'
+        + finRowSub('= Utilidad neta', r.utilidadNeta, true);
+
+    } else if (tab === 'bg') {
+      const sec = lbl => '<div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border);margin-top:6px">'+lbl+'</div>';
+      const totalA  = (r.cajaFinal||0)+(r.cxcFinal||0)+(r.invFinalValorizado||0)+(r.afNetos||0);  // ivaCredito ya compensado
+      const totalP  = (r.deudaFinal||0)+(r.ivaAPagar||0);
+      const capital = r.capitalContable ?? 0;
+      const utilidad = r.utilidadNeta||0;
+      // FASE 6D-5 — acumAnt visible solo para desglose pedagógico; el total real
+      // usa r.patrimonio (motor), no el plug A-P-capital-utilidad (tautológico).
+      const acumAnt = r.resultadoAcumulado != null ? (r.resultadoAcumulado - utilidad) : 0;
+      const patrimonioTotal = Number(r.patrimonio ?? (r.totalActivos - r.totalPasivos));
+      const totalPasivosReal = Number(r.totalPasivos ?? totalP);
+      const cuadra  = Math.abs((r.totalActivos ?? totalA) - totalPasivosReal - patrimonioTotal) < 2;
+      html += sec('Activo Corriente')
+        + finRow('Caja y bancos',              r.cajaFinal,           false,'pos')
+        + finRow('Cuentas por cobrar (CxC)',   r.cxcFinal,            false,'neutral')
+        + finRow('Inventarios',                r.invFinalValorizado,  false,'neutral')
+        + finRowSub('= Total Activo Corriente', (r.cajaFinal||0)+(r.cxcFinal||0)+(r.invFinalValorizado||0), false)
+        + sec('Activo No Corriente')
+        + finRow('Activos fijos netos', r.afNetos||0, false,'neutral')
+        + ((r.intangiblesBrutos||0)>0 ? finRow('Activos intangibles (patentes)', r.intangiblesBrutos||0, false,'neutral') : '')
+        + ((r.intangiblesBrutos||0)>0 ? finRow('(-) Amortización acumulada', -(r.amortizacionAcumulada||0), false,'neg') : '')
+        + ((r.intangiblesBrutos||0)>0 ? finRow('Intangibles netos', r.intangiblesNetos||0, false,'neutral') : '')
+        + finRowSub('= Total Activo No Corriente', (r.afNetos||0)+(r.intangiblesNetos||0), false)
+        + '<div style="height:4px;border-top:2px solid var(--border2)"></div>'
+        + finRowSub('= TOTAL ACTIVOS', r.totalActivos||(r.cajaFinal||0)+(r.cxcFinal||0)+(r.invFinalValorizado||0)+(r.afNetos||0)+(r.intangiblesNetos||0), true)
+        + sec('Pasivo Corriente')
+        + ((r.ivaAPagar||0)>0 ? finRow('IVA por pagar (saldo trimestre)', r.ivaAPagar, false,'neg') : '')
+        + ((r.sobregiro||0)>0 ? finRow('Sobregiro bancario', r.sobregiro, false,'neg') : '')
+        + finRow('Préstamos y deuda total', r.deudaFinal, false,'neg')
+        + finRowSub('= Total Pasivo Corriente', totalP, false)
+        + sec('Pasivo No Corriente')
+        + finRow('Deuda largo plazo', 0, false,'neutral')
+        + finRowSub('= Total Pasivo No Corriente', 0, false)
+        + '<div style="height:4px;border-top:2px solid var(--border2)"></div>'
+        + finRowSub('= TOTAL PASIVOS', totalP, true)
+        + sec('Patrimonio')
+        + finRow('Capital contable / social', capital, false,'neutral')
+        + finRow('Resultados acumulados', acumAnt, false, acumAnt>=0?'pos':'neg')
+        + finRow('Utilidad / pérdida del período', utilidad, false, utilidad>=0?'pos':'neg')
+        + (Math.abs(patrimonioTotal - (capital+acumAnt+utilidad)) >= 1 ? finRow('Otros efectos (IVA a favor y similares)', patrimonioTotal - (capital+acumAnt+utilidad), false, 'neutral') : '')
+        + '<div style="height:4px;border-top:2px solid var(--border2)"></div>'
+        + finRowSub('= TOTAL PATRIMONIO', patrimonioTotal, true)
+        + finRowSub('TOTAL PASIVOS + PATRIMONIO', totalPasivosReal + patrimonioTotal, true)
+        + '<div style="margin-top:8px;padding:8px 12px;background:'+(cuadra?'rgba(6,255,165,.08)':'rgba(255,107,107,.08)')
+        + ';border-radius:var(--r);font-size:.78rem;font-family:var(--font-mono)">'
+        + (cuadra?'✓ Balance cuadra':'⚠ Verificar balance')
+        + ' (Activos = '+fmt.bs(r.totalActivos ?? totalA)+' | P+P = '+fmt.bs(totalPasivosReal+patrimonioTotal)+')</div>';
+
+    } else if (tab === 'fe') {
+      const sec  = lbl => '<div style="font-family:var(--font-mono);font-size:.65rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:6px 0;border-bottom:2px solid var(--border2);margin-bottom:4px">'+lbl+'</div>';
+      const secS = lbl => '<div style="font-family:var(--font-mono);font-size:.6rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0">'+lbl+'</div>';
+      const entOp = (r.cobrosContado||0);
+      const salOp = (r.pagoProduccion||0)+(r.pagoOperarios2||r.pagoOperarios||r.costoOperarios||0)
+        +(r.costoVendedores||0)+(r.pagoMktTotal||0)+(r.pagoInnovacion||0)
+        +(r.pagoGastosAdmin||r.gastoAdminFijo||0)+(r.pagoGastosPlanta||r.gastoFijoPlanta||0)
+        +(r.pagoAlmacenamiento||0)+(r.pagoIVA||0)+(r.pagoIT??r.impuestoIT??0)+(r.pagoIUE||0);
+      const entFin = (r.ingresoPrestamo||0)+(r.sobregiro||0);
+      const salFin = (r.pagoCapitalPrestamo||0)+(r.pagoIntereses||r.interesesPrestamo||0)
+        +(r.interesSobregiro||0)+(r.comisionApertura||0);
+      html += finRow('Caja inicial', r.cajaInicial, false,'neutral')
+        + '<div style="height:12px"></div>'
+        + sec('Flujo de Efectivo por Actividades de Operación')
+        + secS('Entradas Operativas')
+        + finRow('Cobros por ventas al contado', r.cobrosContado||0, false,'pos')
+        + '<div style="height:4px"></div>'
+        + secS('Salidas Operativas')
+        + ((r.pagoProduccion||0)>0    ? finRow('Pago de producción',          -(r.pagoProduccion||0),  false,'neg') : '')
+        + ((r.pagoOperarios2||r.pagoOperarios||r.costoOperarios||0)>0 ? finRow('Pago de operarios', -(r.pagoOperarios2||r.pagoOperarios||r.costoOperarios||0), false,'neg') : '')
+        + ((r.costoVendedores||0)>0   ? finRow('Pago fuerza de ventas',       -(r.costoVendedores||0), false,'neg') : '')
+        + ((r.pagoMktTotal||0)>0      ? finRow('Pago de marketing total',     -(r.pagoMktTotal||0),    false,'neg') : '')
+        + ((r.pagoInnovacion||0)>0    ? finRow('Pago de innovación',          -(r.pagoInnovacion||0),  false,'neg') : '')
+        + ((r.pagoGastosAdmin||r.gastoAdminFijo||0)>0  ? finRow('Pago gastos administrativos', -(r.pagoGastosAdmin||r.gastoAdminFijo||0), false,'neg') : '')
+        + ((r.pagoGastosPlanta||r.gastoFijoPlanta||0)>0 ? finRow('Pago gastos de planta',     -(r.pagoGastosPlanta||r.gastoFijoPlanta||0), false,'neg') : '')
+        + ((r.pagoIVA||0)>0  ? finRow('Pago IVA neto al Estado',   -(r.pagoIVA||0),  false,'neg') : '')
+        + finRow('IT devengado período', -(r.impuestoIT||0), false,'neg')
+        + ((r.compensacionIT||0)>0 ? finRow('(+) Compensado con saldo IUE (DS 5563)', +(r.compensacionIT||0), false,'pos') : '')
+        + finRow('Pago IT efectivo en caja', -(r.pagoIT??r.impuestoIT??0), false, (r.pagoIT??r.impuestoIT??0)===0?'neutral':'neg')
+        + ((r.pagoIUE||0)>0  ? finRow('Pago IUE',           -(r.pagoIUE||0),   false,'neg') : '')
+        + ((r.saldoIUEfinal||0)>0 ? finRow('Saldo IUE compensable próx. trim.', r.saldoIUEfinal||0, false,'neutral') : '')
+        + '<div style="height:4px;border-top:1px dashed var(--border)"></div>'
+        + finRowSub('= Flujo Neto de Actividades de Operación', entOp-salOp, false)
+        + '<div style="height:12px"></div>'
+        + sec('Flujo de Efectivo por Actividades de Inversión')
+        + secS('Entradas de Inversión')
+        + finRow('Venta de activos fijos', r.ventaActivosFijos||0, false,'pos')
+        + '<div style="height:4px"></div>'
+        + secS('Salidas de Inversión')
+        + finRow('Compra de activos fijos / maquinaria', -(r.compraActivosFijos||0), false,'neg')
+        + '<div style="height:4px;border-top:1px dashed var(--border)"></div>'
+        + finRowSub('= Flujo Neto de Actividades de Inversión', (r.ventaActivosFijos||0)-(r.compraActivosFijos||0), false)
+        + '<div style="height:12px"></div>'
+        + sec('Flujo de Efectivo por Actividades de Financiamiento')
+        + secS('Entradas de Financiamiento')
+        + ((r.ingresoPrestamo||0)>0 ? finRow('Ingreso por préstamo', r.ingresoPrestamo||0, false,'pos') : '')
+        + '<div style="height:4px"></div>'
+        + secS('Salidas de Financiamiento')
+        + ((r.pagoIntereses||r.interesesPrestamo||0)>0 ? finRow('Pago intereses préstamo', -(r.pagoIntereses||r.interesesPrestamo||0), false,'neg') : '')
+        + ((r.comisionApertura||0)>0 ? finRow('Pago comisión apertura', -(r.comisionApertura||0), false,'neg') : '')
+        + '<div style="height:4px;border-top:1px dashed var(--border)"></div>'
+        + finRowSub('= Flujo Neto de Actividades de Financiamiento', entFin-salFin, false)
+        + '<div style="height:12px"></div>'
+        + '<div style="height:4px;border-top:2px solid var(--border2)"></div>'
+        + finRowSub('Aumento / Disminución Neta de Caja', (entOp-salOp)+(r.ventaActivosFijos||0)-(r.compraActivosFijos||0)+(entFin-salFin), false)
+        + '<div style="height:4px"></div>'
+        + finRowSub('= CAJA FINAL', r.cajaFinal, true);
+    }
+
+    html += '</div>';
+    return html;
+  }).join('');
+}
+
+// helper: wrap vista comparativa + vista estudiante con toggle
+function withToggle(pfxId, tabKey, comparativaHTML, rd) {
+  const btnId  = pfxId + '_togBtn_' + tabKey;
+  const compId = pfxId + '_comp_'   + tabKey;
+  const studId = pfxId + '_stud_'   + tabKey;
+  return '<div>'
+    + '<div style="display:flex;justify-content:flex-end;margin-bottom:10px">'
+    + '<div style="display:inline-flex;border:0.5px solid var(--border);border-radius:var(--r);overflow:hidden;font-size:.75rem">'
+    + '<button id="' + btnId + '_c" onclick="toggleVistaAdmin(\'' + compId + '\',\'' + studId + '\',\'' + btnId + '\')" '
+    + 'style="padding:5px 12px;background:var(--accent);color:#fff;border:none;cursor:pointer">Vista comparativa</button>'
+    + '<button id="' + btnId + '_s" onclick="toggleVistaAdmin(\'' + studId + '\',\'' + compId + '\',\'' + btnId + '\')" '
+    + 'style="padding:5px 12px;background:transparent;border:none;cursor:pointer;color:var(--text2)">Vista por equipo</button>'
+    + '</div></div>'
+    + '<div id="' + compId + '">' + comparativaHTML + '</div>'
+    + '<div id="' + studId + '" style="display:none">' + buildVistaEstudiantePorEquipo(rd, tabKey) + '</div>'
+    + '</div>';
+}
+
+window.toggleVistaAdmin = (showId, hideId, btnId) => {
+  const show = document.getElementById(showId);
+  const hide = document.getElementById(hideId);
+  if (show) show.style.display = '';
+  if (hide) hide.style.display = 'none';
+  // Actualizar estilos de botones
+  const bComp = document.getElementById(btnId + '_c');
+  const bStud = document.getElementById(btnId + '_s');
+  if (bComp && bStud) {
+    const showIsComp = showId.includes('_comp_');
+    bComp.style.background = showIsComp ? 'var(--accent)' : 'transparent';
+    bComp.style.color       = showIsComp ? '#fff' : 'var(--text2)';
+    bStud.style.background  = showIsComp ? 'transparent' : 'var(--accent)';
+    bStud.style.color       = showIsComp ? 'var(--text2)' : '#fff';
+  }
+};
+
+window.adminEFTab = (n, pfx) => {
+  // F7-FIX: pfx identifica la instancia correcta de los tabs
+  // Soporte legado: si no hay pfx busca IDs antiguos
+  [1,2,3,4,5,6].forEach(i => {
+    const pane = document.getElementById(pfx ? pfx+'pane'+i : 'adminEFPane'+i);
+    const btn  = document.getElementById(pfx ? pfx+'btn'+i  : 'btnEFT'+i);
+    if (pane) pane.style.display = i===n ? '' : 'none';
+    if (btn)  btn.className = i===n ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+  });
+};
+
+
+// ── Admin Mercado ──────────────────────────────────────────
+
+// ══════════════════════════════════════════════════════════
+// ADMIN — PARÁMETROS
+// ══════════════════════════════════════════════════════════
+
+
+// ══════════════════════════════════════════════════════════
+// ADMIN — SEGMENTOS
+// ══════════════════════════════════════════════════════════
+let segmentosLocal = [];
+
+// ══════════════════════════════════════════════════════════
+// ADMIN — MATRIZ AFINIDAD
+// ══════════════════════════════════════════════════════════
+let afinidadLocal = null;
+let segmentosForAfinidad = [];
+
+// ══════════════════════════════════════════════════════════
+// ADMIN — COMPETENCIA EXTERNA
+// ══════════════════════════════════════════════════════════
+let competenciaLocal = [];
+
+
+// ═══════════════════════════════════════════════════════════
+//  EQUIPO
+// ═══════════════════════════════════════════════════════════
+// ── Imprimir panel activo del equipo ─────────────────────────
+function printPanelActivo() {
+  const nombre = (state.me && state.me.nombre) || '';
+  const ronda  = hojaRondaActual || 1;
+  const sub    = 'Trimestre ' + ronda + ' / 20';
+
+  // Detectar la VIEW activa por clase CSS 'active'
+  const activeView = document.querySelector('#screen-equipo .view.active');
+  if (!activeView) { toast('Navega a un panel primero', 'info'); return; }
+
+  const viewId = activeView.id;
+
+  if (viewId === 'eq-financiero') {
+    printFinancieroCompleto(nombre, ronda);
+    return;
+  }
+  if (viewId === 'eq-resultados') {
+    printPanel('equipoResultadosContent', 'KPIs y Resultados — ' + nombre, sub);
+    return;
+  }
+  if (viewId === 'eq-gerencia') {
+    printPanel('eqGerenciaContent', 'Gerencia General — ' + nombre, sub);
+    return;
+  }
+  if (viewId === 'eq-creditos') {
+    printPanel('eq-creditos-content', 'Créditos y Financiamiento — ' + nombre, sub);
+    return;
+  }
+  if (viewId === 'eq-reportes') {
+    printPanel('reportesContent', 'Investigación de Mercado — ' + nombre, sub);
+    return;
+  }
+  if (viewId === 'eq-hoja') {
+    printHoja();
+    return;
+  }
+  toast('Este panel no tiene versión imprimible', 'info');
+}
+
+// ── Imprimir Estados Financieros completos (P&L + BG + FC) ────
+function printFinancieroCompleto(nombre, ronda) {
+  const plEl = document.getElementById('finPL');
+  const bgEl = document.getElementById('finBG');
+  const fcEl = document.getElementById('finFC');
+
+  // Mostrar todos temporalmente para capturar el HTML
+  const prevPL = plEl ? plEl.style.display : '';
+  const prevBG = bgEl ? bgEl.style.display : '';
+  const prevFC = fcEl ? fcEl.style.display : '';
+  if (bgEl) bgEl.style.display = '';
+  if (fcEl) fcEl.style.display = '';
+
+  const html = (plEl ? plEl.innerHTML : '')
+             + (bgEl ? bgEl.innerHTML : '')
+             + (fcEl ? fcEl.innerHTML : '');
+
+  // Restaurar estado de display
+  if (bgEl) bgEl.style.display = prevBG;
+  if (fcEl) fcEl.style.display = prevFC;
+
+  const css = '*{box-sizing:border-box;margin:0;padding:0}'
+    + 'body{font-family:Segoe UI,sans-serif;font-size:11px;color:#111;background:#fff;padding:16px}'
+    + 'h1{font-size:14px;margin-bottom:4px;color:#2a2f45}'
+    + '.sub{font-size:9px;color:#666;margin-bottom:12px;padding-bottom:6px;border-bottom:2px solid #2a2f45}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:10px;font-size:10px}'
+    + 'th{background:#2a2f45;color:#fff;padding:5px 8px;text-align:left;font-size:8.5px;text-transform:uppercase}'
+    + 'td{padding:4px 8px;border:1px solid #ddd;vertical-align:top}'
+    + 'tr:nth-child(even) td{background:#f8f9ff}'
+    + '.result-round-card{border:1px solid #ddd;border-radius:5px;margin-bottom:12px;overflow:hidden;break-inside:avoid}'
+    + '.result-round-header{background:#2a2f45;color:#fff;padding:6px 12px;font-size:9.5px;font-weight:700;text-transform:uppercase}'
+    + '.fin-row{display:flex;justify-content:space-between;padding:3px 12px;border-bottom:1px solid #f0f0f0;font-size:10px}'
+    + '.fin-row.sub{background:#f0f4ff;font-weight:700}'
+    + '.pos,.up{color:#27ae60}.neg,.down{color:#e74c3c}'
+    + '.num{text-align:right}'
+    + 'button,.no-print{display:none!important}'
+    + '@media print{@page{margin:1cm;size:A4}body{padding:8px}}';
+
+  const win = window.open('', '_blank', 'width=1100,height=900');
+  const parts = [
+    '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"/>',
+    '<title>Estados Financieros — ' + nombre + ' — Ronda ' + ronda + '</title>',
+    '<style>' + css + '</style></head><body>',
+    '<h1>Estados Financieros — ' + nombre + '</h1>',
+    '<div class="sub">Trimestre ' + ronda + ' / 20 | SimNego COM540 UAGRM</div>',
+    '<h2 style="font-size:11px;margin:8px 0 4px;color:#2a2f45;text-transform:uppercase">Estado de Resultados</h2>',
+    (plEl ? plEl.innerHTML : ''),
+    '<div style="margin-top:14px"></div>',
+    '<h2 style="font-size:11px;margin:8px 0 4px;color:#2a2f45;text-transform:uppercase">Balance General</h2>',
+    (bgEl ? bgEl.innerHTML : ''),
+    '<div style="margin-top:14px"></div>',
+    '<h2 style="font-size:11px;margin:8px 0 4px;color:#2a2f45;text-transform:uppercase">Flujo de Efectivo</h2>',
+    (fcEl ? fcEl.innerHTML : ''),
+    '</body></html>'
+  ];
+  win.document.open();
+  win.document.write(parts.join(''));
+  win.document.close();
+  setTimeout(function(){ try{ win.print(); }catch(e){} }, 600);
+}
+
+async function initEquipo() {
+  showScreen('screen-equipo');
+  setupNav('screen-equipo');
+  document.getElementById('equipoNombreSidebar').textContent = state.me.nombre;
+  document.getElementById('btnEquipoLogout').addEventListener('click', doLogout);
+  document.getElementById('btnPrintHoja').addEventListener('click', printHoja);
+  // P1 FIX: conectar botones del encabezado a sus funciones
+  document.getElementById('btnGuardar')?.addEventListener('click', guardarDecision);
+  document.getElementById('btnEnviar')?.addEventListener('click', enviarDecision);
+
+  // Show/hide print button only on hoja view
+  document.querySelectorAll('#screen-equipo .nav-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.getElementById('btnPrintHoja').style.display = btn.dataset.view === 'eq-hoja' ? '' : 'none';
+      const esHoja = btn.dataset.view === 'eq-hoja';
+      const btnG = document.getElementById('btnGuardar');
+      const btnE = document.getElementById('btnEnviar');
+      if (btnG) btnG.style.display = esHoja ? 'none' : '';
+      if (btnE) btnE.style.display = esHoja ? 'none' : '';
+    });
+  });
+
+  // ── BUG CORREGIDO: /api/decisiones lanzaba 400 si la sesión perdió
+  //    simulacionId (ej: relogin después de expiración de cookie).
+  //    Ahora muestra mensaje claro en lugar de romper toda la inicialización.
+  try {
+    const decData = await api('GET', '/api/decisiones');
+    state.ref = decData.referencia || null;
+    state.decisiones = normalizarDecisionMultiproducto(decData.decision);
+    const f0Data = await api('GET', '/api/fase0').catch(() => null);
+    if (f0Data && f0Data.fase0Activa &&
+        f0Data.registro?.estado !== 'enviado' &&
+        f0Data.registro?.estado !== 'cerrado') {
+      const btnFase0 = document.querySelector('[data-view="eq-fase0"]');
+      if (btnFase0) btnFase0.click();
+    } else {
+      await loadHojaDecision();
+    }
+  } catch(e) {
+    const wrap = document.getElementById('decisionFormWrap');
+    if (wrap) {
+      wrap.innerHTML = `
+        <div class="empty-state" style="padding:40px 20px;text-align:center">
+          <div style="font-size:48px;margin-bottom:12px">⚠️</div>
+          <h3 style="margin-bottom:8px">Sesión sin simulación activa</h3>
+          <p style="color:var(--text3);font-size:.88rem;margin-bottom:20px">
+            Tu sesión expiró o fue iniciada sin un código de simulación.<br>
+            Cierra sesión y vuelve a ingresar con tu nombre de equipo y contraseña,<br>
+            o solicita al profesor que reactive tu acceso.
+          </p>
+          <button class="btn btn-primary" onclick="doLogout()">Cerrar sesión →</button>
+        </div>`;
+    }
+  }
+}
+
+// ── Decision Form ──────────────────────────────────────────
+async function loadDecisionForm() {
+  const data = await api('GET','/api/decisiones');
+  state.decisiones = normalizarDecisionMultiproducto(data.decision);
+  const n = data.ronda;
+  const isSimulated = data.roundState === 'simulated';
+  const isPending   = data.roundState === 'pending';
+  const isLocked    = data.roundState === 'locked';
+  const submitted   = data.decision.submitted;
+  const isEditable  = !isSimulated && !isPending && !isLocked && !submitted;
+
+  const _decRondaNum = document.getElementById('decRondaNum');
+  if (_decRondaNum) _decRondaNum.textContent = n;
+  const _roundBadge = document.getElementById('equipoRoundBadge');
+  if (_roundBadge) _roundBadge.textContent = `Ronda ${n}/20`;
+  const _stateBadge = document.getElementById('equipoStateBadge');
+  if (_stateBadge) _stateBadge.textContent =
+    isSimulated ? '🔒 Simulada'
+    : isPending  ? '⏸ Pendiente'
+    : isLocked   ? '🔒 Cerrada'
+    : submitted  ? '✓ Enviada'
+    : '🟢 Abierta';
+
+  const msg = isSimulated
+    ? '🔒 Esta ronda ya fue simulada. Los resultados están en "Mis Resultados".'
+    : isPending
+    ? '⏸ El profesor aún no ha habilitado las decisiones para este trimestre. Espera su indicación.'
+    : isLocked
+    ? '🔒 El profesor cerró el envío de decisiones. Ya no puedes modificar.'
+    : submitted
+    ? '✅ Decisiones enviadas. Esperando que el profesor ejecute la simulación.'
+    : '🟢 Ingresa tus decisiones y presiona Enviar cuando estés listo.';
+
+  const bannerClass = isSimulated ? 'simulated'
+    : isPending  ? 'pending'
+    : isLocked   ? 'simulated'
+    : submitted  ? 'submitted'
+    : 'open';
+  document.getElementById('decEstadoMsg').innerHTML = msg;
+
+  const d = state.decisiones;
+  const ref = state.ref;
+  const disabled = isEditable ? '' : 'disabled';
+
+  const segOpts = '<option value="">-- Seleccionar segmento --</option>' +
+  ref.segmentos.map(s => `<option ${s.nombre === d.segmentoObjetivo ? 'selected' : ''}>${s.nombre}</option>`).join('');
+  
+  const canalOpts = ref.canales.map(c => `<option ${c.nombre===d.canal?'selected':''}>${c.nombre}</option>`).join('');
+
+  const inp = (field, val, extra='') => `<input class="form-input editable" data-field="${field}" ${disabled} ${extra} value="${val ?? ''}"/>`;
+  const sel = (field, opts) => `<select class="form-select editable" data-field="${field}" ${disabled}>${opts}</select>`;
+  const chk = (field, val, label, cost) => `
+    <label class="check-label">
+      <input type="checkbox" data-field="${field}" ${val?'checked':''} ${disabled}/>
+      ${label}<span class="check-cost">${cost}</span>
+    </label>`;
+
+  document.getElementById('decisionFormWrap').innerHTML = `
+    <div class="status-banner ${bannerClass}">${msg}</div>
+
+    <div class="decision-card">
+      <div class="decision-card-header"><span class="section-tag">1 · Producto y Segmento</span></div>
+      <div class="decision-card-body">
+        <div class="form-grid">
+          <div class="form-group"><label class="form-label">🎯 Segmento objetivo</label>${sel('segmentoObjetivo',segOpts)}</div>
+          <div class="form-group"><label class="form-label">🧪 Tipo de producto</label>${sel('tipoProducto',prodOpts)}</div>
+          <div class="form-group"><label class="form-label">⭐ Calidad (1–10)</label>${inp('calidad',d.calidad,'type="number" min="1" max="10" step="1"')}<span class="form-hint">5 = estándar · Cada punto extra sube costo unitario +0.20 Bs y mejora atractivo</span></div>
+          <div class="form-group"><label class="form-label">💡 Diferenciación (1–10)</label>${inp('diferenciacion',d.diferenciacion,'type="number" min="1" max="10" step="1"')}<span class="form-hint">+3% costo/punto sobre 5</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="decision-card">
+      <div class="decision-card-header"><span class="section-tag">2 · Precios y Canal</span></div>
+      <div class="decision-card-body">
+        <div class="form-grid">
+          <div class="form-group"><label class="form-label">💰 Precio consumidor (Bs)</label>${inp('precioConsumidor',d.precioConsumidor,'type="number" min="1" step="0.5"')}</div>
+          <div class="form-group"><label class="form-label">🏪 Precio canal (Bs)</label>${inp('precioCanal',d.precioCanal,'type="number" min="1" step="0.5"')}<span class="form-hint">Debe ser menor al precio consumidor</span></div>
+          <div class="form-group"><label class="form-label">📦 Canal de distribución</label>${sel('canal',canalOpts)}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="decision-card">
+      <div class="decision-card-header"><span class="section-tag">3 · Marketing y Fuerza de Ventas</span></div>
+      <div class="decision-card-body">
+        <div class="form-grid">
+          <div class="form-group"><label class="form-label">📢 Marketing (Bs)</label>${inp('marketing',d.marketing,'type="number" min="0" step="500"')}<span class="form-hint">Rendimientos decrecientes (ln)</span></div>
+          <div class="form-group"><label class="form-label">👥 Vendedores actuales</label><input class="form-input" value="${d.vendedoresIniciales}" readonly/></div>
+          <div class="form-group"><label class="form-label">➕ Contratar</label>${inp('contratarVendedores',d.contratarVendedores,'type="number" min="0" step="1"')}<span class="form-hint">Bs 500/vendedor</span></div>
+          <div class="form-group"><label class="form-label">➖ Despedir</label>${inp('despedirVendedores',d.despedirVendedores,'type="number" min="0" step="1"')}<span class="form-hint">Bs 700/vendedor</span></div>
+          <div class="form-group"><label class="form-label">💵 Comisión (%)</label>${inp('comision',d.comision,'type="number" min="0" max="0.5" step="0.005"')}<span class="form-hint">Ej: 0.03 = 3%</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="decision-card">
+      <div class="decision-card-header"><span class="section-tag">4 · Producción</span></div>
+      <div class="decision-card-body">
+        <div class="form-grid">
+          <div class="form-group"><label class="form-label">🏭 Producción (unidades)</label>${inp('produccion',d.produccion,'type="number" min="0" step="500"')}<span class="form-hint">1,500 unid/operario · Descuento escala hasta 18%</span></div>
+          <div class="form-group"><label class="form-label">📦 Inventario inicial (unid)</label><input class="form-input" value="${fmt.num(d.inventarioInicial)}" readonly/><span class="form-hint">Propagado automáticamente</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="decision-card">
+      <div class="decision-card-header"><span class="section-tag">5 · Finanzas</span></div>
+      <div class="decision-card-body">
+        <div class="form-grid">
+          <div class="form-group"><label class="form-label">💵 Caja inicial</label><input class="form-input" value="${fmt.bs(d.cajaInicial)}" readonly/></div>
+          <div class="form-group"><label class="form-label">📈 Préstamo nuevo (Bs)</label>${inp('prestamoNuevo',d.prestamoNuevo,'type="number" min="0" step="1000"')}</div>
+          <div class="form-group"><label class="form-label">📉 Pago voluntario adicional de capital (Bs)</label>${inp('amortizacion',d.amortizacion,'type="number" min="0" step="1000"')}<span class="form-hint">Este monto es decidido por el equipo y reduce la deuda financiera. No corresponde a una cuota automática calculada según el plazo.</span></div>
+          <div class="form-group"><label class="form-label">% Ventas a crédito</label>${inp('pctVentasCredito',d.pctVentasCredito,'type="number" min="0" max="1" step="0.05"')}</div>
+          <div class="form-group"><label class="form-label">% Compras a crédito</label>${inp('pctComprasCredito',d.pctComprasCredito,'type="number" min="0" max="1" step="0.05"')}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="decision-card">
+      <div class="decision-card-header"><span class="section-tag">6 · Investigación de Mercado</span></div>
+      <div class="decision-card-body">
+        <div class="check-grid">
+          ${chk('compraSegmentacion',d.compraSegmentacion,'📊 Segmentación','Bs 1,000')}
+          ${chk('compraPrecios',d.compraPrecios,'💲 Precios','Bs 1,200')}
+          ${chk('compraCompetencia',d.compraCompetencia,'🔍 Competencia','Bs 1,500')}
+          ${chk('compraCanales',d.compraCanales,'📦 Canales','Bs 800')}
+        </div>
+        <p class="form-hint" style="margin-top:10px">Los reportes comprados se mostrarán en la pestaña "Reportes" después de la simulación.</p>
+      </div>
+    </div>
+  `;
+
+  // Bind inputs
+  document.querySelectorAll('#decisionFormWrap [data-field]').forEach(el => {
+    const ev = el.type === 'checkbox' ? 'change' : 'input';
+    el.addEventListener(ev, () => {
+      let val = el.type === 'checkbox' ? el.checked
+              : el.type === 'number'   ? +el.value
+              : el.tagName === 'SELECT' ? el.value.replace(/\s*\(Bs[\d.]+\)\s*$/, '')
+              : el.value;
+      if (el.tagName === 'SELECT' && el.dataset.field === 'tipoProducto') {
+        val = el.value.replace(/\s*\(Bs[\d.\s]+\)\s*$/, '').trim();
+        // FIX: escribir también el campo canónico "producto" que usa el motor
+        state.decisiones['producto'] = val;
+        if (state.decisiones.productos?.[0]) {
+          state.decisiones.productos[0].producto = val;
+        }
+      }
+      state.decisiones[el.dataset.field] = val;
+    });
+  });
+
+  // Toggle buttons visibility
+  document.getElementById('btnGuardar').style.display = isEditable ? '' : 'none';
+  document.getElementById('btnEnviar').style.display  = isEditable ? '' : 'none';
+}
+
+function sincronizarHojaConEstado() {
+  // P4 FIX: sincroniza el DOM de la hoja con state.decisiones antes de
+  // guardar o enviar, capturando cambios no procesados por el change handler.
+  document.querySelectorAll('[data-hoja-field]').forEach(el => {
+    if (!state.decisiones) return;
+    const field = el.dataset.hojaField;
+    const v = el.type === 'checkbox' ? el.checked
+            : el.type === 'number'   ? +el.value
+            : el.tagName === 'SELECT'
+              ? el.value.replace(/\s*\(Bs[\d.\s]+\)\s*$/, '').trim()
+            : el.value;
+    const prodFields = ['producto','segmentoObjetivo','canalPrincipal',
+      'canalSecundario','calidad','precioVenta','produccion','publicidad',
+      'promocion','eventos','marketingRedes','relacionesPublicas',
+      'innovacion','tipoInnovacion','montoInnovacion'];
+    if (state.decisiones.productos?.[0] && prodFields.includes(field)) {
+      state.decisiones.productos[0][field] = v;
+    }
+    if (field === 'producto' || field === 'tipoProducto') {
+      state.decisiones['producto'] = v;
+      if (state.decisiones.productos?.[0]) {
+        state.decisiones.productos[0].producto = v;
+      }
+    }
+    state.decisiones[field] = v;
+  });
+}
+
+async function guardarDecision() {
+  try {
+    const r = await api('POST','/api/decisiones/guardar',{ decision: state.decisiones });
+    if (r?.version != null) { state.decisiones._version = r.version; state.decisiones._guardadaAt = r.guardadaAt; }
+    toast('💾 Decisiones guardadas','success');
+  } catch(e) { toast(e.message,'error'); }
+}
+
+async function enviarDecision() {
+  // Validar rangos críticos antes de enviar
+  const _dec = state.decisiones || {};
+  const contratar = Number(_dec.contratarOperarios ?? 0);
+  const despedir  = Number(_dec.despedirOperarios  ?? 0);
+  if (contratar > 50) return toast('❌ "Contratar operarios" no puede exceder 50 por ronda. Valor ingresado: ' + contratar, 'error');
+  if (despedir  > 50) return toast('❌ "Despedir operarios" no puede exceder 50 por ronda. Valor ingresado: ' + despedir,  'error');
+  if (!confirm('¿Enviar decisiones al simulador?\n\nPodrás ver tus resultados cuando el profesor ejecute la simulación.')) return;
+  try {
+    const _d1 = JSON.parse(JSON.stringify(state.decisiones, (k,v) => v===undefined?null:v));
+    await api('POST','/api/decisiones/enviar',{ decision: _d1 });
+    toast('✅ Decisiones enviadas correctamente','success');
+    await loadDecisionForm();
+  } catch(e) { toast(e.message,'error'); }
+}
+
+// ── Hoja de Decisión ──────────────────────────────────────
+// Estado local de la hoja (se comparte con el formulario principal)
+// ══════════════════════════════════════════════════════════
+// HOJA DE DECISIÓN — 20 rondas
+// Estado local: no se usa hojaRondaActiva dentro de plantillas
+// ══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// HOJA DE DECISIÓN — diseño simple y directo, sin caché
+// Carga siempre fresco desde el servidor al abrir la vista
+// ══════════════════════════════════════════════════════════
+
+let hojaRondaActual = 1;   // ronda que está mostrando el selector
+
+let hojaProductoActivo = 0;
+
+let hojaTieneCambiosSinGuardar = false;
+
+// ADR-002 — estado de módulos opcionales para la sesión de la hoja. Se
+// setea una vez al cargar (equipo-hoja.js, loadHojaDecision) desde
+// decData.referencia.modulosActivos. Vive acá (no en equipo-hoja.js) para
+// seguir el mismo patrón que hojaRondaActual/hojaProductoActivo — variable
+// de estado de sesión de página, no de una función de cálculo puro. Es una
+// desviación deliberada del texto literal de ADR-002 ("garantía en la firma
+// de la función"), igual que la inyección de params.modulos en engine.js.
+let hojaModulosActivos = null;
+
+function normalizarDecisionMultiproducto(decision) {
+  decision = decision || {};
+
+  // FIX: el formulario legado usa data-field="tipoProducto"; mapear a "producto"
+  // para garantizar que el motor siempre recibe el campo correcto.
+  if (!decision.producto && decision.tipoProducto) {
+    decision.producto = decision.tipoProducto;
+  }
+
+  if (!Array.isArray(decision.productos) || decision.productos.length === 0) {
+    decision.productos = [{
+      productoId: 'prod_1',
+      activo: true,
+      producto: decision.producto || decision.tipoProducto || '',
+      segmentoObjetivo: decision.segmentoObjetivo || '',
+      canalPrincipal: decision.canalPrincipal || '',
+      canalSecundario: decision.canalSecundario || 'Ninguno',
+      calidad: decision.calidad ?? 5,
+      precioVenta: decision.precioVenta ?? 3.6,
+      produccion: decision.produccion ?? 18000,
+      publicidad: decision.publicidad ?? 3000,
+      promocion: decision.promocion ?? 2000,
+      eventos: decision.eventos ?? 1000,
+      marketingRedes: decision.marketingRedes ?? 1000,
+      relacionesPublicas: decision.relacionesPublicas ?? 1000,
+      innovacion: decision.innovacion ?? false,
+      tipoInnovacion: decision.tipoInnovacion || '',
+      montoInnovacion: decision.montoInnovacion ?? 0
+    }];
+  }
+
+  // Compatibilidad temporal: el primer producto sigue alimentando los campos antiguos
+  const p = decision.productos[0] || {};
+  decision.producto = p.producto;
+  decision.segmentoObjetivo = p.segmentoObjetivo;
+  decision.canalPrincipal = p.canalPrincipal;
+  decision.canalSecundario = p.canalSecundario;
+  decision.calidad = p.calidad;
+  decision.precioVenta = p.precioVenta;
+  decision.produccion = p.produccion;
+  decision.publicidad = p.publicidad;
+  decision.promocion = p.promocion;
+  decision.eventos = p.eventos;
+  decision.marketingRedes = p.marketingRedes;
+  decision.relacionesPublicas = p.relacionesPublicas;
+  decision.innovacion = p.innovacion;
+  decision.tipoInnovacion = p.tipoInnovacion;
+  decision.montoInnovacion = p.montoInnovacion;
+
+  return decision;
+}
+
+function crearProductoDefault(idx) {
+  return {
+    productoId: 'prod_' + (idx + 1),
+    activo: true,
+    producto: '',
+    segmentoObjetivo: '',
+    canalPrincipal: '',
+    canalSecundario: 'Ninguno',
+    calidad: 5,
+    precioVenta: 0,
+    produccion: 0,
+    publicidad: 0,
+    promocion: 0,
+    eventos: 0,
+    marketingRedes: 0,
+    relacionesPublicas: 0,
+    innovacion: false,
+    tipoInnovacion: 'Producto',
+    montoInnovacion: 0,
+    vendedoresIniciales: state?.ref?.parametros?.vendedoresIniciales ?? 0,
+    contratarVendedores: 0,
+    despedirVendedores: 0,
+    // Etapa 3.2: Operarios
+    contratarOperarios:  0,
+    despedirOperarios:   0,
+    montoCapacitacion:   0,
+    // Etapa 3.1: Materia Prima
+    proveedorElegido:    '',
+    cantidadMPpedida:    0,
+    // Campos legado (para no romper motor con decisiones monoproducto viejas)
+    tipoPrestamo: 'Ninguno',
+    montoPrestamo: 0,
+    amortizacion: 0,
+  };
+}
+
+async function loadHojaDecision() {
+  const cont = document.getElementById('hojaContent');
+  const sel  = document.getElementById('hojaRondaSelector');
+  if (!cont) { console.error('hojaContent no encontrado'); return; }
+
+  cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3)">Cargando hoja de decisión…</div>';
+
+  let decData, resData;
+  try {
+    [decData, resData] = await Promise.all([
+      api('GET', '/api/decisiones'),
+      api('GET', '/api/resultados'),
+    ]);
+  } catch(e) {
+    cont.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p style="color:var(--accent4)">Error de conexión: ${e.message}</p></div>`;
+    return;
+  }
+
+  hojaRondaActual = decData.ronda;
+
+  // Construir navegación de rondas
+  const simuladas = new Set((resData.historial || []).map(h => h.ronda));
+  let navHTML = '';
+  for (let i = 1; i <= 20; i++) {
+    const isCurrent = i === decData.ronda;
+    const isSim     = simuladas.has(i);
+    const isFuture  = i > decData.ronda;
+    const cls = isCurrent ? 'active' : isSim ? 'done' : '';
+    navHTML += `<button class="hoja-round-btn ${cls}" ${isFuture?'disabled':''} onclick="hojaIrRonda(${i})">T${i}</button>`;
+  }
+  if (sel) sel.innerHTML = navHTML;
+
+  // Renderizar ronda actual
+  await hojaRenderRonda(decData.ronda, decData.decision, decData.roundState, null);
+}
+
+// Navegar a otra ronda desde el selector
+window.hojaIrRonda = async (n) => {
+  hojaRondaActual = n;
+  document.querySelectorAll('.hoja-round-btn').forEach((b, i) => b.classList.toggle('active', i+1===n));
+
+  const cont = document.getElementById('hojaContent');
+  if (!cont) return;
+  cont.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text3)">Cargando…</div>';
+
+  try {
+    // Ronda actual: cargar decisión editable
+    const decData = await api('GET', '/api/decisiones');
+    if (n === decData.ronda) {
+      await hojaRenderRonda(n, decData.decision, decData.roundState, null);
+      return;
+    }
+    // Ronda pasada: cargar resultado + decisión del historial
+    const resData = await api('GET', '/api/resultados');
+    const item = resData.historial?.find(h => h.ronda === n);
+    if (item) {
+      await hojaRenderRonda(n, item.decision || {}, 'simulated', item.resultado);
+    } else {
+      cont.innerHTML = `<div class="empty-state"><div class="empty-icon">📋</div><p>Sin datos para la ronda ${n}</p></div>`;
+    }
+  } catch(e) {
+    cont.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p style="color:var(--accent4)">${e.message}</p></div>`;
+  }
+};
+
+// Renderiza la hoja para una ronda específica
+// hojaRenderRonda() vivía acá — eliminada (código muerto desde el Día 5).
+// index.html carga app.js (línea 250) y modules/equipo-hoja.js (línea 258) como
+// scripts clásicos, mismo scope global: la declaración posterior gana, así que esta
+// copia nunca se ejecutaba. La versión viva y mantenida está en
+// public/modules/equipo-hoja.js:421 (941 líneas vs. las 764 que había acá — habían
+// divergido). Cualquier cambio a la hoja de decisiones va SOLO en ese archivo.
+
+
+function hojaResumenV2(d) {
+  if (!d) return '';
+  const rows = [
+    ['Producto',        d.producto],
+    ['Segmento',        d.segmentoObjetivo],
+    ['Canal principal', d.canalPrincipal],
+    ['Canal secundario',d.canalSecundario||'Ninguno'],
+    ['Calidad',         d.calidad],
+    ['Precio venta',    `Bs ${d.precioVenta??0}`],
+    ['Producción',      fmt.num(d.produccion??0)+' unid'],
+    ['Publicidad',      fmt.bs(d.publicidad??0)],
+    ['Promoción',       fmt.bs(d.promocion??0)],
+    ['Eventos',         fmt.bs(d.eventos??0)],
+    ['Mkt redes',       fmt.bs(d.marketingRedes??0)],
+    ['RRPP',            fmt.bs(d.relacionesPublicas??0)],
+    ['Contratar vend.', d.contratarVendedores??0],
+    ['Despedir vend.',  d.despedirVendedores??0],
+    ['Préstamo tipo',   d.tipoPrestamo||'Ninguno'],
+    ['Monto préstamo',  fmt.bs(d.montoPrestamo??0)],
+    ['Pago voluntario de capital', fmt.bs(d.amortizacion??0)],
+    ['Innovación',      d.innovacion?`Sí — ${d.tipoInnovacion}`:'No'],
+    ['Monto innovación',fmt.bs(d.montoInnovacion??0)],
+    ['Investigación',   d.tipoInvestigacion||'No'],
+  ];
+  return rows.map(([l,v])=>`
+    <div class="hoja-resumen-row">
+      <span class="hoja-resumen-label">${l}</span>
+      <span class="hoja-resumen-val">${v??'—'}</span>
+    </div>`).join('');
+}
+
+// KPI rápido al final de la hoja (cuando la ronda está simulada)
+function hojaKpiHTML(r) {
+  if (!r) return '';
+  return `
+  <div class="hoja-section">
+    <div class="hoja-section-title" style="color:var(--accent5)">📊 Resultados del Trimestre (resumen)</div>
+    <div class="hoja-resumen-grid">
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Ventas reales</span><span class="hoja-resumen-val">${fmt.num(r.ventasReales)} unid</span></div>
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Market share</span><span class="hoja-resumen-val">${fmt.pct(r.shareReal)}</span></div>
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Ventas netas</span><span class="hoja-resumen-val">${fmt.bs(r.ventasNetas)}</span></div>
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Utilidad bruta</span><span class="hoja-resumen-val" style="color:${r.utilidadBruta>=0?'var(--accent2)':'var(--accent4)'}">${fmt.bs(r.utilidadBruta)}</span></div>
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Utilidad neta</span><span class="hoja-resumen-val" style="color:${r.utilidadNeta>=0?'var(--accent5)':'var(--accent4)'}">${fmt.bs(r.utilidadNeta)}</span></div>
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Caja final</span><span class="hoja-resumen-val" style="color:${r.cajaFinal>=0?'var(--accent2)':'var(--accent4)'}">${fmt.bs(r.cajaFinal)} <span class="badge ${r.alertaCaja==='ALERTA'?'badge-alert':'badge-ok'}">${r.alertaCaja}</span></span></div>
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Costo unitario</span><span class="hoja-resumen-val">Bs ${fmt.d(r.costoUnitario,3)}</span></div>
+      <div class="hoja-resumen-row"><span class="hoja-resumen-label">Inventario final</span><span class="hoja-resumen-val">${fmt.num(r.inventarioFinal)} unid</span></div>
+    </div>
+    <p style="padding:8px 14px;font-size:.78rem;color:var(--text2)">Ver <strong>📊 Estados Financieros</strong> para P&L completo, Balance General y Flujo de Efectivo.</p>
+  </div>`;
+}
+
+window.mostrarKpiRonda = (n, historial) => {
+  document.querySelectorAll('#equipoResultadosContent .ronda-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.textContent.replace('Ronda ',''))===n);
+  });
+  if (!historial) { api('GET','/api/resultados').then(d=>mostrarKpiRonda(n,d.historial)); return; }
+  const item = historial.find(h=>h.ronda===n);
+  if (!item) return;
+  const r = item.resultado;
+
+  // ── Calculated KPIs ──
+  const mgBruto   = r.ventasNetas>0 ? (r.utilidadBruta/r.ventasNetas*100).toFixed(2) : '—';
+  const mgNeto    = r.ventasNetas>0 ? (r.utilidadNeta/r.ventasNetas*100).toFixed(2)  : '—';
+  const endeud    = r.totalActivos>0 ? (r.deudaFinal/r.totalActivos*100).toFixed(2)  : '0.00';
+  const invProd   = r.produccion>0 ? (r.inventarioFinal/r.produccion*100).toFixed(1) : '0.0';
+  const vendFin   = r.vendedoresFinales || 0;
+  const ventasPorVend = vendFin>0 ? fmt.num(Math.round(r.ventasReales/vendFin)) : '—';
+  const ingrPorVend  = vendFin>0 ? fmt.bs(Math.round(r.ventasNetas/vendFin))   : '—';
+  const utilPorUnid  = r.ventasReales>0 ? fmt.d((r.ventasNetas-r.costoVentas)/r.ventasReales,3) : '—';
+  const liquidez  = r.deudaFinal>0 ? fmt.d((r.cajaFinal+r.cxcFinal+r.invFinalValorizado)/r.deudaFinal,2) : '∞';
+
+  const kpiSection = (title) =>
+    '<tr><td colspan="3" style="padding:6px 14px 2px;font-family:var(--font-mono);font-size:.63rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;border-top:1px solid var(--border)">' + title + '</td></tr>';
+
+  const kpiRow = (label, value, color='', hint='') =>
+    `<tr><td style="padding:8px 14px;color:var(--text2);font-size:.82rem">${label}</td>
+         <td style="padding:8px 14px;font-family:var(--font-mono);font-size:.82rem;text-align:right;color:${color||'var(--text)'}">${value}</td></tr>`;
+
+  document.getElementById('kpiDetalle').innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;margin-top:14px">
+
+      <!-- ── Gerente de Marketing ────────────────────── -->
+      <div class="result-round-card">
+        <div class="result-round-header"><h3>📣 Gerente de Marketing</h3></div>
+        <table style="width:100%;border-collapse:collapse">
+
+          ${/* ─ Penetración y posicionamiento ─ */kpiSection('🎯 Penetración y Posicionamiento')}
+          ${kpiRow('Market Share real',
+              fmt.pct(r.shareReal),
+              r.shareReal>0.35?'var(--accent5)':r.shareReal>0.15?'var(--accent3)':'var(--accent4)',
+              r.shareReal>0.35?'Líder de mercado':r.shareReal>0.15?'Posición competitiva':'Posición débil')}
+          ${kpiRow('Demanda formal del segmento',   fmt.num(r.demandaFormal||0),     'var(--text2)')}
+          ${kpiRow('Demanda asignada a la empresa', fmt.num(r.demandaAsignada||0),   'var(--accent3)')}
+          ${kpiRow('Unidades vendidas',             fmt.num(r.ventasReales||0),      r.ventasReales>0?'var(--accent5)':'var(--accent4)')}
+          ${kpiRow('% Demanda capturada',
+              r.demandaFormal>0 ? fmt.pct((r.ventasReales||0)/(r.demandaFormal)) : '—',
+              'var(--text2)')}
+
+          ${kpiSection('💰 Rentabilidad Comercial')}
+          ${kpiRow('Ventas brutas (Bs)',            fmt.bs(r.ventasBrutas||0),       'var(--text2)')}
+          ${kpiRow('Ventas netas (Bs)',             fmt.bs(r.ventasNetas||0),        'var(--accent3)')}
+          ${kpiRow('Margen bruto (%)',
+              r.ventasNetas>0 ? ((r.utilidadBruta||0)/r.ventasNetas*100).toFixed(1)+'%' : '—',
+              (r.utilidadBruta||0)>=0?'var(--accent5)':'var(--accent4)',
+              (r.utilidadBruta||0)>=0?'Margen positivo':'Margen negativo')}
+          ${kpiRow('Precio de venta (Bs)',
+              fmt.bs(r.precioVenta||0),
+              'var(--text2)')}
+          ${kpiRow('Costo unitario (Bs)',
+              fmt.bs(r.costoUnitario||0),
+              'var(--text2)')}
+          ${kpiRow('Margen unitario (Bs)',
+              fmt.bs((r.precioVenta||0)-(r.costoUnitario||0)),
+              (r.precioVenta||0)>(r.costoUnitario||0)?'var(--accent5)':'var(--accent4)')}
+
+          ${kpiSection('📢 Inversión y Eficiencia de Marketing')}
+          ${kpiRow('Gasto publicidad (Bs)',         fmt.bs(r.publicidad||0),         'var(--text2)')}
+          ${kpiRow('Gasto total marketing (Bs)',    fmt.bs(r.pagoMktTotal||0),       'var(--text2)')}
+          ${kpiRow('ROI Marketing',
+              fmt.d(r.roiMarketing??0,2)+'x',
+              (r.roiMarketing??0)>=2?'var(--accent5)':(r.roiMarketing??0)>=1?'var(--accent3)':'var(--accent4)',
+              (r.roiMarketing??0)>=2?'Excelente':(r.roiMarketing??0)>=1?'Aceptable':'Bajo')}
+          ${kpiRow('Costo Mkt por unidad vendida (Bs)',
+              r.ventasReales>0 ? fmt.bs((r.pagoMktTotal||0)/(r.ventasReales)) : '—',
+              'var(--text2)')}
+          ${kpiRow('Ingresos por Bs 1 de publicidad (x)',
+              r.publicidad>0 ? fmt.d((r.ventasNetas||0)/(r.publicidad),1)+'x' : '—',
+              (r.publicidad||0)>0&&(r.ventasNetas||0)/(r.publicidad)>3?'var(--accent5)':'var(--text2)')}
+
+          ${kpiSection('⭐ Marca y Posicionamiento')}
+          ${kpiRow('Brand Equity',
+              (r.brandEquityFinal ?? 50).toFixed(1)+' pts',
+              (r.brandEquityFinal||50)>70?'var(--accent5)':(r.brandEquityFinal||50)>50?'var(--accent3)':'var(--accent4)',
+              (r.brandEquityFinal||50)>70?'Marca fuerte':(r.brandEquityFinal||50)>50?'En construcción':'Marca débil')}
+          ${kpiRow('Atractivo competitivo',
+              fmt.d(r.atractivo||0,2)+' pts',
+              (r.atractivo||0)>10?'var(--accent5)':(r.atractivo||0)>5?'var(--accent3)':'var(--accent4)')}
+
+        </table>
+      </div>
+
+      <!-- ── Gerente de Producción ───────────────────── -->
+      <div class="result-round-card">
+        <div class="result-round-header"><h3>🏭 Gerente de Producción</h3></div>
+        <table style="width:100%;border-collapse:collapse">
+          ${kpiRow('Producción (unidades)',             fmt.num(r.produccion))}
+          ${kpiRow('Inventario final (unidades)',   fmt.num(r.inventarioFinal))}
+          ${kpiRow('Inventario / Producción',       invProd+'%', +invProd>20?'var(--accent4)':'var(--accent5)')}
+          ${kpiRow('Capacidad efectiva (unidades)',    fmt.num(r.capacidadEfectiva ?? '—'))}
+          ${kpiRow('Stock MP disponible (unid)',    fmt.num(r.stockMPFinal ?? '—'))}
+          <tr><td colspan="2" style="padding:4px 12px;font-family:var(--font-mono);font-size:.6rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;background:rgba(255,255,255,.03)">Desglose Costo Unitario</td></tr>
+          ${kpiRow('Costo unitario TOTAL (Bs)',     fmt.d(r.costoUnitario,2))}
+          ${kpiRow('  └ Transformación (MOD+OH, Bs)', (() => {
+            if (r.costoTransformacion!=null) return fmt.d(r.costoTransformacion,2);
+            if (r.costoBaseProducto)         return fmt.d(Math.round((r.costoBaseProducto||0)*0.60*100)/100,2);
+            // fallback: CU - MPneto - calidad - canal_aprox
+            const pct = 0.60;
+            return fmt.d(Math.round((r.costoUnitario||0)*pct*100)/100,2);
+          })())}
+          ${kpiRow('  └ Factor calidad (Bs)',       r.costoCalidadUnit!=null?fmt.d(r.costoCalidadUnit,2):'—')}
+          ${kpiRow('  └ Canal distribución (Bs)', (() => {
+            if (r.costoCanal_calc!=null) return fmt.d(Math.max(0,r.costoCanal_calc),2);
+            // fallback: CU − trans − calidad − MPneto − efInnovacion
+            const trans  = r.costoTransformacion || Math.round((r.costoBaseProducto||0)*0.60*100)/100;
+            const cal    = r.costoCalidadUnit    || Math.round(0.20*(r.calidad||5)*100)/100;
+            const mpNeto = Math.round((r.costoMPunitario||0)*0.87*100)/100;
+            const ef     = r.efInnovacionUnit    || 0;
+            return fmt.d(Math.max(0, Math.round(((r.costoUnitario||0)-trans-cal-mpNeto-ef)*100)/100),2);
+          })())}
+          ${kpiRow('  └ MP proveedor — factura (Bs)', r.costoMPunitario>0?fmt.d(r.costoMPunitario,2):'—', r.costoMPunitario>0?'var(--accent3)':'')}
+          ${kpiRow('  └   IVA crédito MP (13%)',    r.costoMPunitario>0?fmt.d(Math.round(r.costoMPunitario*0.13*100)/100,2):'—', 'var(--accent5)')}
+          ${kpiRow('  └   Costo neto MP en ER',      r.costoMPunitario>0?fmt.d(Math.round((r.costoMPunitario-r.costoMPunitario*0.13)*100)/100,2):'—')}
+          ${r.efInnovacionUnit?kpiRow('  └ Innovación/proceso (Bs)', fmt.d(r.efInnovacionUnit,2)):''}
+          ${kpiRow('Proveedor activo',              r.proveedorElegido||'Sin proveedor')}
+        </table>
+      </div>
+
+      <!-- ── Gerente de RRHH ─────────────────────────── -->
+      <div class="result-round-card">
+        <div class="result-round-header"><h3>👥 Gerente de RRHH</h3></div>
+        <table style="width:100%;border-collapse:collapse">
+          ${(() => {
+            const prods = r.productos?.length > 1 ? r.productos : null;
+            if (prods) {
+              // Multiproducto: mostrar por producto
+              return prods.map((p, i) => {
+                const vf  = p.vendedoresFinales || 0;
+                const vpu = vf>0 ? fmt.num(Math.round((p.ventasReales||0)/vf)) : '—';
+                const ipu = vf>0 ? fmt.bs(Math.round((p.ventasNetas||0)/vf)) : '—';
+                const of  = p.operariosFinales || 0;
+                const co  = p.costoOperarios!=null ? fmt.bs(p.costoOperarios) : '—';
+                const hdr = '<tr><td colspan="2" style="padding:4px 12px;font-family:var(--font-mono);'
+                  + 'font-size:.6rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;'
+                  + 'background:rgba(255,255,255,.03)">Producto ' + (i+1) + ': ' + (p.producto||'—') + '</td></tr>';
+                return hdr
+                  + kpiRow('Vendedores finales', fmt.num(vf))
+                  + kpiRow('Ventas por vendedor (unid)', vpu)
+                  + kpiRow('Ingresos netos por vendedor', ipu)
+                  + kpiRow('Operarios finales', fmt.num(of))
+                  + kpiRow('Costo operarios (Bs)', co);
+              }).join('');
+            }
+            // Monoproducto: vista simple
+            return kpiRow('Vendedores finales', vendFin)
+              + kpiRow('Ventas por vendedor (unid)', ventasPorVend)
+              + kpiRow('Ingresos netos por vendedor', ingrPorVend)
+              + kpiRow('Operarios finales', fmt.num(r.operariosFinales ?? '—'))
+              + kpiRow('Costo operarios (Bs)', r.costoOperarios!=null?fmt.bs(r.costoOperarios):'—');
+          })()}
+        </table>
+      </div>
+
+      <!-- ── Gerente Financiero ──────────────────────── -->
+      <div class="result-round-card" style="grid-column:span 2">
+        <div class="result-round-header"><h3>💰 Gerente Financiero</h3></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:0">
+          <table style="width:100%;border-collapse:collapse">
+            ${kpiRow('Costo unitario (Bs)',           fmt.d(r.costoUnitario,3))}
+            ${kpiRow('Margen bruto',                  mgBruto+'%',  +mgBruto<0?'var(--accent4)':'var(--accent5)')}
+            ${kpiRow('Margen neto',                   mgNeto+'%',   +mgNeto<0?'var(--accent4)':'var(--accent5)')}
+            ${kpiRow('Utilidad por unidad vendida',   utilPorUnid)}
+            ${kpiRow('Utilidad neta (Bs)',             fmt.bs(r.utilidadNeta), r.utilidadNeta<0?'var(--accent4)':'var(--accent5)')}
+            ${kpiRow('EBIT (Bs)',                      fmt.bs(r.ebit??0),      (r.ebit??0)<0?'var(--accent4)':'var(--accent5)')}
+            ${kpiRow('Caja final (Bs)',                fmt.bs(r.cajaFinal),    r.cajaFinal<=0?'var(--accent4)':'var(--accent5)')}
+            ${kpiRow('Sobregiro (Bs)',                 r.sobregiro>0?fmt.bs(r.sobregiro):'—', r.sobregiro>0?'var(--accent4)':'')}
+          </table>
+          <table style="width:100%;border-collapse:collapse">
+            ${kpiRow('Deuda total (Bs)',               fmt.bs(r.deudaFinal))}
+            ${kpiRow('Endeudamiento (Deuda/Activos)',  endeud+'%', +endeud>50?'var(--accent4)':+endeud>30?'var(--accent3)':'var(--accent5)')}
+            ${kpiRow('Liquidez corriente',             liquidez)}
+            ${kpiRow('IVA neto pagado (Bs)',           r.ivaAPagar!=null?fmt.bs(r.ivaAPagar):'—', 'var(--accent4)')}
+            ${kpiRow('IT pagado (Bs)',                 r.impuestoIT!=null?fmt.bs(r.impuestoIT):'—', 'var(--accent4)')}
+            ${kpiRow('IUE pagado (Bs)',                r.impuestoIUE>0?fmt.bs(r.impuestoIUE):'(pago anual)', r.impuestoIUE>0?'var(--accent4)':'')}
+            ${kpiRow('Provisión IUE (Bs)',             r.provisionIUE!=null?fmt.bs(r.provisionIUE):'—', 'var(--accent3)')}
+          </table>
+        </div>
+
+        <!-- ── Compensación IUE→IT (DS 5563) ── -->
+        ${(r.compensacionIT>0 || r.saldoIUEfinal>0 || r.saldoIUEant>0) ? `
+        <div style="margin:12px 0 0;padding:12px 16px;background:linear-gradient(135deg,rgba(16,185,129,.08),rgba(59,130,246,.08));border-radius:8px;border:1px solid rgba(16,185,129,.2)">
+          <div style="font-family:var(--font-mono);font-size:.65rem;color:#10B981;text-transform:uppercase;letter-spacing:1.2px;margin-bottom:10px">
+            ⚖️ Compensación IUE → IT — Decreto Supremo 5563
+          </div>
+          <div style="font-size:.76rem;color:var(--text3);margin-bottom:10px;line-height:1.6">
+            El IUE efectivamente pagado genera un saldo compensable que se descuenta del IT de los períodos siguientes, hasta agotarse.
+          </div>
+          <table style="width:100%;border-collapse:collapse">
+            ${kpiRow('Saldo IUE disponible inicio', r.saldoIUEant>0?fmt.bs(r.saldoIUEant):'Bs 0', r.saldoIUEant>0?'var(--accent5)':'')}
+            ${kpiRow('IT devengado (gasto ER)', fmt.bs(r.impuestoIT||0), 'var(--accent4)')}
+            ${r.compensacionIT>0?kpiRow('IT compensado con saldo IUE', fmt.bs(r.compensacionIT), 'var(--accent5)'):''}
+            ${kpiRow('IT efectivo pagado en caja', fmt.bs(r.ITefectivoCaja??r.impuestoIT??0), (r.ITefectivoCaja??r.impuestoIT??0)>0?'var(--accent4)':'var(--accent5)')}
+            ${r.impuestoIUE>0?kpiRow('IUE pagado → recarga saldo', fmt.bs(r.impuestoIUE), 'var(--accent3)'):''}
+            ${kpiRow('Saldo IUE para próximo trimestre', r.saldoIUEfinal>0?fmt.bs(r.saldoIUEfinal):'Bs 0 (agotado)', r.saldoIUEfinal>0?'var(--accent5)':'var(--text3)')}
+          </table>
+          ${r.compensacionIT>0?`<div style="margin-top:8px;padding:6px 10px;background:rgba(16,185,129,.1);border-radius:4px;font-size:.73rem;color:#10B981">
+            ✅ Ahorro de caja este trimestre: ${fmt.bs(r.compensacionIT)} (IT compensado con IUE pagado en R${Math.floor(((r.rondaNumero||1)-1)/4)*4||4})
+          </div>`:''}
+        </div>` : ''}
+      </div>
+
+    </div>`;
+};
+
+// ─── Estados Financieros Completos ───────────────────────────
+
+window.mostrarFinanciero = (n) => {
+  document.querySelectorAll('#eq-financiero-nav .ronda-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.textContent.replace(/\D+/g,''))===n);
+  });
+  const item = (window._finHistorial||[]).find(h=>h.ronda===n);
+  const el = document.getElementById('eq-financiero-content');
+  if (!item || !el) return;
+  const r = item.resultado;
+  if (!r || typeof r !== 'object') { el.innerHTML = '<p style="padding:20px;color:var(--text3)">Sin datos para esta ronda.</p>'; return; }
+
+  el.innerHTML = `
+  <div style="display:flex;gap:8px;margin-bottom:16px;flex-wrap:wrap">
+    <button class="btn btn-ghost" id="tabPL" onclick="showFinTab('pl')" style="background:var(--accent);color:#fff">📋 Estado de Resultados</button>
+    <button class="btn btn-ghost" id="tabBG" onclick="showFinTab('bg')">🏦 Balance General</button>
+    <button class="btn btn-ghost" id="tabFC" onclick="showFinTab('fc')">💧 Flujo de Efectivo</button>
+    <button class="btn btn-ghost" id="tabTR" onclick="showFinTab('tr')">📊 Reporte Tributario</button>
+  </div>
+
+  <!-- Estado de Resultados -->
+  <div id="finPL">
+    <div class="result-round-card">
+      <div class="result-round-header" style="display:flex;align-items:center;justify-content:space-between">
+        <h3>Estado de Resultados — Ronda ${n}</h3>
+        <button class="btn btn-ghost btn-sm no-print" style="font-size:.72rem;padding:3px 10px" onclick="printFinancieroCompleto((state.me&&state.me.nombre)||'',${n})">🖨️ Imprimir completo</button>
+      </div>
+      <div style="padding:16px 20px">
+
+        ${/* ER desglosado por producto — multiproducto */
+          (r.productos && r.productos.length > 1) ? (() => {
+            const PROD_COLORS = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#EC4899'];
+            const fR = (lbl, v, neg, tipo) => {
+              const val = neg ? -(v||0) : (v||0);
+              const color = tipo==='pos'?'var(--accent2)':tipo==='neg'?'var(--accent4)':'var(--text1)';
+              return '<tr><td style="padding:3px 8px;font-size:.75rem;color:var(--text2)">' + lbl + '</td>'
+                + '<td style="padding:3px 8px;text-align:right;font-family:var(--font-mono);font-size:.75rem;color:'+color+'">'
+                + (val<0?'(':'') + 'Bs ' + Math.round(Math.abs(val)).toLocaleString('es') + (val<0?')':'') + '</td></tr>';
+            };
+            const fRS = (lbl, v) => {
+              const color = (v||0)>=0?'var(--accent2)':'var(--accent4)';
+              return '<tr style="border-top:1px solid var(--border)"><td style="padding:4px 8px;font-size:.75rem;font-weight:700">' + lbl + '</td>'
+                + '<td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);font-size:.75rem;font-weight:700;color:'+color+'">'
+                + 'Bs ' + Math.round(v||0).toLocaleString('es') + '</td></tr>';
+            };
+            const secR = lbl => '<tr><td colspan="2" style="padding:4px 8px 2px;font-family:var(--font-mono);font-size:.6rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;border-bottom:1px solid var(--border)">' + lbl + '</td></tr>';
+
+            const cards = r.productos.map((p,i) => {
+              const col = PROD_COLORS[i % PROD_COLORS.length];
+              const utilColor = (p.utilidadNeta||0)>=0?'var(--accent2)':'var(--accent4)';
+              const gastosOp = p.gastosOp || 0;
+              const ebit     = p.ebit ?? ((p.utilidadBruta||0) - gastosOp);
+              const utilNeta = p.utilidadNeta || 0;
+              const utilBruta  = p.utilidadBruta || 0;
+              const margenBrutoPct = (p.ventasNetas||0)>0 ? ((utilBruta/(p.ventasNetas))*100).toFixed(1)+'%' : '—';
+              const margenNetoPct  = (p.ventasNetas||0)>0 ? ((utilNeta/(p.ventasNetas))*100).toFixed(1)+'%' : '—';
+              const mbColor = utilBruta>=0?'var(--accent2)':'var(--accent4)';
+              return '<div style="background:var(--bg2);border:0.5px solid var(--border);border-top:3px solid '+col
+                + ';border-radius:var(--r);padding:12px 14px;min-width:200px;flex:1">'
+                + '<div style="font-weight:700;font-size:.78rem;color:'+col+';margin-bottom:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'
+                + (p.producto||'Producto '+(i+1)) + '</div>'
+                + '<table style="width:100%;border-collapse:collapse">'
+                + fR('Ventas netas', p.ventasNetas||0, false, 'neutral')
+                + fR('(−) Costo ventas', p.costoVentas||0, true, 'neg')
+                + fRS('= Utilidad bruta', utilBruta)
+                + '<tr><td style="padding:2px 8px;font-size:.72rem;color:var(--text3)">Margen bruto</td>'
+                + '<td style="padding:2px 8px;text-align:right;font-family:var(--font-mono);font-size:.72rem;color:'+mbColor+'">' + margenBrutoPct + '</td></tr>'
+                + fR('(−) Gastos operativos', gastosOp, true, 'neg')
+                + fRS('= EBIT', ebit)
+                + fR('(−) Impuesto IT', p.impuestoIT||0, true, 'neg')
+                + '<tr style="border-top:2px solid var(--border2);background:rgba(255,255,255,.03)">'
+                + '<td style="padding:5px 8px;font-size:.76rem;font-weight:700">= Utilidad neta</td>'
+                + '<td style="padding:5px 8px;text-align:right;font-family:var(--font-mono);font-size:.78rem;font-weight:700;color:'+utilColor+'">'
+                + 'Bs ' + Math.round(utilNeta).toLocaleString('es') + '</td></tr>'
+                + '<tr><td style="padding:3px 8px;font-size:.72rem;color:var(--text3)">Margen neto</td>'
+                + '<td style="padding:3px 8px;text-align:right;font-family:var(--font-mono);font-size:.72rem;color:'+utilColor+'">' + margenNetoPct + '</td></tr>'
+                + '<tr><td style="padding:3px 8px;font-size:.72rem;color:var(--text3)">Unidades vendidas</td>'
+                + '<td style="padding:3px 8px;text-align:right;font-family:var(--font-mono);font-size:.72rem">' + Math.round(p.ventasReales||0).toLocaleString('es') + '</td></tr>'
+                + '</table></div>';
+            }).join('');
+
+            // Totales empresa — usar ventasNetasReal (S11: comisiones netas)
+            const totVN   = r.ventasNetasReal||r.ventasNetas||0;
+            const totCV   = r.costoVentas||0;
+            const totUB   = r.utilidadBruta||0;
+            const totGO   = r.gastosOp||0;
+            const totEBIT = r.ebit||0;
+            const totIT   = r.impuestoIT||0;
+            const totUN   = r.utilidadNeta||0;
+            const totMgn  = totVN>0 ? (totUN/totVN*100).toFixed(1)+'%' : '—';
+            const totColor= totUN>=0?'var(--accent2)':'var(--accent4)';
+
+            return '<div style="font-family:var(--font-mono);font-size:.63rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:4px 0 8px 0;border-bottom:1px solid var(--border);margin-bottom:10px">📦 ER por Producto</div>'
+              + '<div style="display:flex;gap:10px;overflow-x:auto;padding-bottom:8px;margin-bottom:12px">' + cards + '</div>'
+              + '<div style="background:var(--bg2);border:0.5px solid var(--border2);border-radius:var(--r);padding:10px 14px;margin-bottom:14px">'
+              + '<div style="font-family:var(--font-mono);font-size:.63rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">📊 Consolidado empresa</div>'
+              + '<table style="width:100%;border-collapse:collapse">'
+              + fR('Ventas netas', totVN, false, 'neutral')
+              + fR('(−) Costo ventas', totCV, true, 'neg')
+              + fRS('= Utilidad bruta', totUB)
+              + fR('(−) Gastos operativos', totGO, true, 'neg')
+              + fRS('= EBIT', totEBIT)
+              + fR('(−) Impuesto IT', totIT, true, 'neg')
+              + '<tr style="border-top:2px solid var(--border2);background:rgba(255,255,255,.03)">'
+              + '<td style="padding:5px 8px;font-size:.76rem;font-weight:700">= Utilidad neta empresa</td>'
+              + '<td style="padding:5px 8px;text-align:right;font-family:var(--font-mono);font-size:.78rem;font-weight:700;color:'+totColor+'">'
+              + 'Bs ' + Math.round(totUN).toLocaleString('es') + '</td></tr>'
+              + '<tr><td style="padding:3px 8px;font-size:.72rem;color:var(--text3)">Margen neto empresa</td>'
+              + '<td style="padding:3px 8px;text-align:right;font-family:var(--font-mono);font-size:.72rem;color:'+totColor+'">' + totMgn + '</td></tr>'
+              + '</table></div>'
+              + '<div style="font-family:var(--font-mono);font-size:.63rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border);margin-bottom:4px">📋 Estado de Resultados Detallado</div>';
+          })() : ''
+        }
+
+        ${(() => {
+          // Opción 1: consolidar gastos de todos los productos para multiproducto
+          const prods = r.productos?.length > 1 ? r.productos : null;
+          const sumP  = (fn) => prods ? prods.reduce((s,p) => s + (fn(p)||0), 0) : null;
+
+          // Gastos comerciales — suma todos los productos
+          const gPub  = prods ? sumP(p=>p.gastoPublicidad||Math.round((p.publicidad||0)*0.87))
+                               : (r.gastoPublicidad||Math.round((r.publicidad||0)*0.87));
+          const gProm = prods ? sumP(p=>p.gastoPromocion||Math.round((p.promocion||0)*0.87))
+                               : (r.gastoPromocion||Math.round((r.promocion||0)*0.87));
+          const gEv   = prods ? sumP(p=>p.gastoEventos||Math.round((p.eventos||0)*0.87))
+                               : (r.gastoEventos||Math.round((r.eventos||0)*0.87));
+          const gRed  = prods ? sumP(p=>p.gastoMktRedes||Math.round((p.marketingRedes||0)*0.87))
+                               : (r.gastoMktRedes||Math.round((r.marketingRedes||0)*0.87));
+          const gRRPP = prods ? sumP(p=>p.gastoRRPP||Math.round((p.relacionesPublicas||0)*0.87))
+                               : (r.gastoRRPP||Math.round((r.relacionesPublicas||0)*0.87));
+          // Fuerza de ventas y operarios — específicos por producto
+          const gVend = prods ? sumP(p=>p.costoVendedores||p.gastoCostoVend||0)
+                               : (r.costoVendedores||0);
+          const gOper = prods ? sumP(p=>p.pagoOperarios||p.costoOperarios||0)
+                               : (r.pagoOperarios||r.costoOperarios||0);
+          // Costos fijos comunes — solo prod_1 (Alternativa 3)
+          const gAdmin  = r.gastoAdminFijo || 0;
+          const gPlanta = r.gastoFijoPlanta || 0;
+          const gAlmac  = prods ? sumP(p=>p.costoAlmacenamiento||0) : (r.costoAlmacenamiento||0);
+          const gInnov  = prods ? sumP(p=>p.gastoInnovacionNeto||Math.round((p.gastoInnovacion||0)*0.87))
+                                 : (r.gastoInnovacionNeto||Math.round((r.gastoInnovacion||0)*0.87));
+          const tieneInnov = prods ? prods.some(p=>p.gastoInnovacion>0) : r.gastoInnovacion>0;
+
+          // Consolidados de ventas
+          const totVentasBrutas = prods ? sumP(p=>p.ventasBrutas||0) : (r.ventasBrutas||0);
+          const totIvaDebito    = prods ? sumP(p=>p.ivaDebito||0)    : (r.ivaDebito||0);
+          const totTotalFact = /*fix_totalfact_v3*/ r.totalFacturado || (r.ivaDebito ? Math.round(r.ivaDebito / 0.13) : 0);
+          const totComisNeto    = prods ? sumP(p=>p.comisionesNeto||Math.round((p.comisiones||0)*0.87)) : (r.comisionesNeto||Math.round((r.comisiones||0)*0.87));
+          const totVentasNetas  = prods ? sumP(p=>p.ventasNetasReal||p.ventasNetas||0) : (r.ventasNetasReal||r.ventasNetas||0);
+          // Costo de ventas detalle
+          const totCVmp    = prods ? sumP(p=>p.cvMP||(p.costoVentas-(p.pagoCalidad||0))||0) : (r.cvMP||(r.costoVentas-(r.pagoCalidad||0))||0);
+          const totCVcalid = prods ? sumP(p=>p.pagoCalidad||0) : (r.pagoCalidad||0);
+          // Gastos operativos adicionales
+          const gCostoVend = prods ? sumP(p=>p.gastoCostoVend||p.costoVendedores||0) : (r.gastoCostoVend||r.costoVendedores||0);
+          // gastoInvMkt es decisión de empresa (no por producto) — usar consolidado r
+          const gInvMkt    = r.gastoInvMktNeto || 0;
+          const tieneInvMkt= gInvMkt > 0;
+
+          const multiLabel = prods ? ' <span style="font-size:.58rem;color:var(--accent3)">(suma todos los productos)</span>' : '';
+          const secER = lbl => '<div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border);margin-top:4px">'+lbl+multiLabel+'</div>';
+
+          return ''
+            // ── VENTAS ──────────────────────────────────────────
+            + secER('Ingresos')
+            + finRow('Precio facturado al cliente (con IVA)', totTotalFact, false, 'neutral')
+            + finRow('(−) IVA débito fiscal (13%)', -totIvaDebito, false, 'neg')
+            + finRowSub('= Ventas brutas (sin IVA)', totVentasBrutas, true)
+            + finRow('(−) Comisiones canal (neto)', -totComisNeto, false, 'neg')
+            + finRowSub('= Ventas netas', totVentasNetas, true)
+            + '<div style="height:4px"></div>'
+            // ── COSTO DE VENTAS ─────────────────────────────────
+            + secER('Costo de Ventas')
+            + finRow('Costo materia prima neto', -totCVmp, false, 'neg')
+            + finRow('Costo calidad / control', -totCVcalid, false, 'neg')
+            + finRow('    MOD — Operarios producción', -gOper, false, 'neg')
+            + finRow('    Overhead — Gasto fijo planta', -gPlanta, false, 'neg')
+            + finRow('    Depreciación planta', -(r.depreciacion||0), false, 'neg')
+            + finRowSub('= Total costo de ventas', -r.costoVentas, true)
+            + finRowSub('= Utilidad bruta', r.utilidadBruta, true)
+            + '<div style="height:4px"></div>'
+            // ── GASTOS COMERCIALES ──────────────────────────────
+            + secER('(-) Gastos Comerciales')
+            + finRow('Publicidad', -gPub, false, 'neg')
+            + finRow('Promoción y descuentos', -gProm, false, 'neg')
+            + finRow('Eventos y activaciones', -gEv, false, 'neg')
+            + finRow('Marketing en redes', -gRed, false, 'neg')
+            + finRow('Relaciones públicas', -gRRPP, false, 'neg')
+            + finRow('Fuerza de ventas (sueldos)', -gCostoVend, false, 'neg')
+            + (tieneInvMkt ? finRow('Investigación de mercado', -gInvMkt, false, 'neg') : '')
+            // ── GASTOS ADMINISTRATIVOS ──────────────────────────
+            + secER('(-) Gastos Administrativos')
+            + finRow('Gastos administrativos fijos', -gAdmin, false, 'neg')
+            // ── GASTOS OPERATIVOS ───────────────────────────────
+            + secER('(-) Gastos Operativos')
+            + finRow('Almacenamiento de inventario', -gAlmac, false, 'neg')
+            + (tieneInnov ? finRow('Innovación y desarrollo', -gInnov, false, 'neg') : '');
+        })()}
+
+        <!-- EBITDA -->
+        <div style="height:4px;border-top:1px dashed var(--border)"></div>
+        ${finRowSub('= EBITDA', (r.ebit??0)+(r.depreciacion??0), true, 'var(--accent3)')}
+
+        <!-- DEPRECIACIÓN -->
+        <div style="height:2px"></div>
+        ${finRow('(-) Depreciación',           -r.depreciacion,        false,'neg')}
+
+        <!-- EBIT -->
+        <div style="height:4px;border-top:1px dashed var(--border)"></div>
+        ${finRowSub('= EBIT / Utilidad Operativa', r.ebit??0, true)}
+        <div style="height:6px"></div>
+
+        <!-- GASTOS FINANCIEROS -->
+        <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border)">(-) Gastos Financieros</div>
+        ${finRow('Intereses préstamo',         -r.interesesPrestamo,   false,'neg')}
+        ${r.interesSobregiro>0 ? finRow('Intereses sobregiro',-(r.interesSobregiro), false,'neg') : ''}
+        ${(r.comisionApertura||0)>0 ? finRow('Comisión apertura devengada',-(r.comisionApertura), false,'neg') : ''}
+        <div style="height:4px;border-top:1px dashed var(--border)"></div>
+        ${finRowSub('= Utilidad antes de impuestos', (r.ebit??0)-(r.gastoFinanciero??0), true)}
+        <div style="height:6px"></div>
+
+        <!-- IMPUESTOS -->
+        <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border)">(-) Impuestos</div>
+        ${finRow('IT (3% precio facturado)',     -r.impuestoIT,          false,'neg')}
+        ${r.impuestoIUE>0 ? finRow('IUE (25% utilidad gravable)', -(r.impuestoIUE), false,'neg') : ''}
+        <div style="margin-top:10px;padding:8px 10px;background:rgba(59,130,246,.07);border-radius:6px;border-left:3px solid #3B82F6;font-size:.73rem;color:var(--text3);line-height:1.6">
+          <strong style="color:#3B82F6">ⓘ IVA — tributo neutro para la empresa (Ley 843)</strong><br>
+          Débito fiscal (ventas): ${fmt.bs(r.ivaDebito||0)}&nbsp;&nbsp;·&nbsp;&nbsp;
+          Crédito fiscal (compras + servicios con factura): ${fmt.bs(r.ivaCredito||0)}<br>
+          <strong>IVA neto a pagar al Estado: ${fmt.bs(r.ivaAPagar||0)}</strong><br>
+          El IVA no es gasto — la empresa lo cobra al cliente y entrega el neto al Estado.
+        </div>
+        <div style="height:4px;border-top:2px solid var(--border2)"></div>
+        ${finRowSub('= Utilidad neta',         r.utilidadNeta,         true)}
+      </div>
+    </div>
+  </div>
+
+  <!-- Balance General -->
+  <div id="finBG" style="display:none">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px">
+
+      <!-- ACTIVOS -->
+      <div>
+        <div class="result-round-card" style="margin-bottom:12px">
+          <div class="result-round-header"><h3>Activos</h3></div>
+          <div style="padding:16px 20px">
+
+            <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border)">Activo Corriente</div>
+            ${finRow('Caja y bancos',              r.cajaFinal,           false,'pos')}
+            ${finRow('Cuentas por cobrar (CxC)',   r.cxcFinal,            false,'neutral')}
+            ${finRow('Inventarios',                r.invFinalValorizado,  false,'neutral')}
+            <div style="height:4px;border-top:1px dashed var(--border)"></div>
+            ${finRowSub('= Total Activo Corriente', (r.cajaFinal||0)+(r.cxcFinal||0)+(r.invFinalValorizado||0), false)}
+
+            <div style="height:8px"></div>
+            <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border)">Activo No Corriente</div>
+            ${(r.activosFijosIniciales||0)>0 ? finRow('Activos fijos (valor inicial)', r.activosFijosIniciales, false,'neutral') : ''}
+            ${(r.activosFijosIniciales||0)>0 ? finRow('(-) Depreciación acumulada', -(r.depreciacionAcumulada||r.depreciacion||0), false,'neg') : ''}
+            ${finRow('Activos fijos netos', r.afNetos||0, false,'neutral')}
+            <div style="height:4px;border-top:1px dashed var(--border)"></div>
+            ${((r.intangiblesBrutos||0)>0) ? finRow('Activos intangibles (patentes)', r.intangiblesBrutos||0, false,'neutral') : ''}
+            ${((r.intangiblesBrutos||0)>0) ? finRow('(-) Amortización acumulada', -(r.amortizacionAcumulada||0), false,'neg') : ''}
+            ${((r.intangiblesBrutos||0)>0) ? finRow('Intangibles netos', r.intangiblesNetos||0, false,'neutral') : ''}
+            ${finRowSub('= Total Activo No Corriente', (r.afNetos||0)+(r.intangiblesNetos||0), false)}
+
+            <div style="height:8px"></div>
+            <div style="height:4px;border-top:2px solid var(--border2)"></div>
+            ${finRowSub('= TOTAL ACTIVOS', r.totalActivos||(r.cajaFinal||0)+(r.cxcFinal||0)+(r.invFinalValorizado||0)+(r.afNetos||0)+(r.intangiblesNetos||0), true)}
+          </div>
+        </div>
+      </div>
+
+      <!-- PASIVOS + PATRIMONIO -->
+      <div>
+        <div class="result-round-card" style="margin-bottom:12px">
+          <div class="result-round-header"><h3>Pasivos</h3></div>
+          <div style="padding:16px 20px">
+
+            <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border)">Pasivo Corriente</div>
+            ${(r.ivaAPagar||0)>0 ? finRow('IVA por pagar (saldo trimestre)', r.ivaAPagar, false,'neg') : ''}
+            ${(r.sobregiro||0)>0 ? finRow('Sobregiro bancario',        r.sobregiro, false,'neg') : ''}
+            ${finRow('Préstamos y deuda total',    r.deudaFinal,        false,'neg')}
+            <div style="height:4px;border-top:1px dashed var(--border)"></div>
+            ${finRowSub('= Total Pasivo Corriente', (r.deudaFinal||0)+(r.ivaAPagar||0)+(r.sobregiro||0), false)}
+
+            <div style="height:8px"></div>
+            <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px;padding:4px 0;border-bottom:1px solid var(--border)">Pasivo No Corriente</div>
+            ${finRow('Deuda largo plazo',           0,                   false,'neutral')}
+            <div style="height:4px;border-top:1px dashed var(--border)"></div>
+            ${finRowSub('= Total Pasivo No Corriente', 0,               false)}
+
+            <div style="height:8px"></div>
+            <div style="height:4px;border-top:2px solid var(--border2)"></div>
+            ${finRowSub('= TOTAL PASIVOS', (r.deudaFinal||0)+(r.ivaAPagar||0)+(r.sobregiro||0), true)}
+          </div>
+        </div>
+
+        <div class="result-round-card" style="margin-bottom:12px">
+          <div class="result-round-header"><h3>Patrimonio</h3></div>
+          <div style="padding:16px 20px">
+            ${(() => {
+              // Usar valores del engine directamente — no recalcular
+              const capital  = r.capitalContable ?? 0;
+              const utilidad = r.utilidadNeta    || 0;
+              const acumAnt  = r.resultadoAcumulado != null
+                ? (r.resultadoAcumulado - utilidad)   // acumulado ANTES de esta ronda
+                : 0;
+              const patrimonioVisible = capital + acumAnt + utilidad;
+              const patrimonio = Number(r.patrimonio ?? patrimonioVisible);
+              const otrosEfectos = patrimonio - patrimonioVisible;
+              return finRow('Capital contable / social', capital,  false, 'neutral')
+                + finRow('Resultados acumulados', acumAnt, false, acumAnt>=0?'pos':'neg')
+                + finRow('Utilidad / pérdida del período', utilidad, false, utilidad>=0?'pos':'neg')
+                + (Math.abs(otrosEfectos) >= 1 ? finRow('Otros efectos (IVA a favor y similares)', otrosEfectos, false, otrosEfectos>=0?'pos':'neg') : '')
+                + '<div style="height:4px;border-top:2px solid var(--border2)"></div>'
+                + finRowSub('= TOTAL PATRIMONIO', patrimonio, true);
+            })()}
+          </div>
+        </div>
+
+        <div class="result-round-card">
+          <div style="padding:12px 16px">
+            ${(() => {
+              const totalA   = r.totalActivos||(r.cajaFinal||0)+(r.cxcFinal||0)+(r.invFinalValorizado||0)+(r.afNetos||0)+(r.intangiblesNetos||0);
+              const totalP   = (r.deudaFinal||0)+(r.ivaAPagar||0);
+              const patrim   = Number(r.patrimonio ?? (totalA - totalP));  // fix: ?? en vez de || (evita descartar 0 legítimo)
+              const totalPP  = totalP + patrim;
+              const cuadra   = Math.abs(totalA - totalPP) < 2;
+              return finRowSub('TOTAL PASIVOS + PATRIMONIO', totalPP, true)
+                + '<div style="margin-top:8px;padding:8px 12px;background:'
+                + (cuadra?'rgba(6,255,165,.08)':'rgba(255,107,107,.08)')
+                + ';border-radius:var(--r);font-size:.78rem;font-family:var(--font-mono)">'
+                + (cuadra ? '✓ Balance cuadra' : '⚠ Verificar balance')
+                + ' (Activos = ' + fmt.bs(totalA) + ' | P+P = ' + fmt.bs(totalPP) + ')</div>';
+            })()}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Flujo de Efectivo -->
+  <div id="finFC" style="display:none">
+    <div class="result-round-card">
+      <div class="result-round-header"><h3>Estado de Flujo de Efectivo — Ronda ${n}</h3></div>
+      <div style="padding:16px 20px">
+
+        ${finRow('Caja inicial', r.cajaInicial, false, 'neutral')}
+        <div style="height:12px"></div>
+
+        <!-- ── ACTIVIDADES DE OPERACIÓN ── -->
+        <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:6px 0;border-bottom:2px solid var(--border2);margin-bottom:4px">
+          Flujo de Efectivo por Actividades de Operación
+        </div>
+
+        <div style="font-family:var(--font-mono);font-size:.6rem;color:var(--accent2);text-transform:uppercase;letter-spacing:1px;padding:4px 0">Entradas Operativas</div>
+        ${finRow('Cobros por ventas al contado',      r.cobrosContado||0,                        false,'pos')}
+        <div style="height:4px"></div>
+        <div style="font-family:var(--font-mono);font-size:.6rem;color:var(--accent4);text-transform:uppercase;letter-spacing:1px;padding:4px 0">Salidas Operativas</div>
+        ${(r.pagoMPbruto||0)>0       ? finRow('Pago materia prima (bruto)',    -(r.pagoMPbruto||0),          false,'neg') : ''}
+        ${(r.pagoComisiones||0)>0    ? finRow('Pago comisión canal',           -(r.pagoComisiones||0),       false,'neg') : ''}
+        ${(r.pagoOperarios2||r.pagoOperarios||0)>0 ? finRow('Pago de operarios', -(r.pagoOperarios2||r.pagoOperarios||0), false,'neg') : ''}
+        ${(r.costoVendedores||0)>0   ? finRow('Pago fuerza de ventas',         -(r.costoVendedores||0),      false,'neg') : ''}
+        ${(r.pagoMktTotal||0)>0      ? finRow('Pago de marketing total',        -(r.pagoMktTotal||0),         false,'neg') : ''}
+        ${(r.pagoInnovacion||0)>0    ? finRow('Pago de innovación operativa',   -(r.pagoInnovacion||0),       false,'neg') : ''}
+        ${(r.pagoCalidad||0)>0       ? finRow('Pago de calidad',                -(r.pagoCalidad||0),          false,'neg') : ''}
+        ${(r.pagoGastosAdmin||r.pagoAdmin||r.gastoAdminFijo||0)>0   ? finRow('Pago de gastos administrativos', -(r.pagoGastosAdmin||r.pagoAdmin||r.gastoAdminFijo||0), false,'neg') : ''}
+        ${(r.pagoGastosPlanta||r.pagoPlanta||r.gastoFijoPlanta||0)>0 ? finRow('Pago de gastos de planta',     -(r.pagoGastosPlanta||r.pagoPlanta||r.gastoFijoPlanta||0), false,'neg') : ''}
+        ${(r.pagoAlmacenamiento||r.pagoAlmacen||0)>0 ? finRow('Pago de almacenamiento', -(r.pagoAlmacenamiento||r.pagoAlmacen||0), false,'neg') : ''}
+        ${(r.pagoIVAPeriodoAnterior||0)>0 ? finRow('Pago IVA trimestre anterior al Estado', -(r.pagoIVAPeriodoAnterior||0), false,'neg') : ''}
+        ${(r.ivaAPagar||0)>0 ? '<div style="font-size:.72rem;color:var(--text3);padding:3px 0 3px 12px;border-bottom:0.5px solid var(--border)">IVA generado este trimestre: Bs '+Math.round(r.ivaAPagar||0).toLocaleString()+' (se pagará en el siguiente trimestre)</div>' : ''}
+        ${(r.compensacionIT||0)>0
+          ? finRow('IT devengado período', -(r.impuestoIT||0), false,'neg') +
+            finRow('(+) Compensado con saldo IUE', +(r.compensacionIT||0), false,'pos') +
+            finRow('Pago IT efectivo en caja', -(r.pagoIT||0), false,'neutral')
+          : finRow('Pago IT (efectivo)', -(r.pagoIT??r.impuestoIT??0), false,'neg')}
+
+        ${(r.pagoIUE||0)>0 ? finRow('Pago IUE',              -(r.pagoIUE||0), false,'neg') : ''}
+        ${(r.saldoIUEfinal||0)>0 ? finRow('Saldo IUE compensable próx. trimestre', r.saldoIUEfinal||0, false,'neutral') : ''}
+        <div style="height:4px;border-top:1px dashed var(--border)"></div>
+        ${(() => {
+          const entOp = (r.cobrosContado||0);
+          const salOp = (r.pagoMPbruto||0)+(r.pagoComisiones||0)
+                       +(r.pagoOperarios2||r.pagoOperarios||0)+(r.costoVendedores||0)
+                       +(r.pagoMktTotal||0)+(r.pagoInnovacion||0)+(r.pagoCalidad||0)
+                       +(r.pagoGastosAdmin||r.pagoAdmin||r.gastoAdminFijo||0)
+                       +(r.pagoGastosPlanta||r.pagoPlanta||r.gastoFijoPlanta||0)
+                       +(r.pagoAlmacenamiento||r.pagoAlmacen||0)
+                       +(r.pagoIVAPeriodoAnterior||0)+(r.pagoIT??r.impuestoIT??0)+(r.pagoIUE||0);
+          return finRowSub('= Flujo Neto de Actividades de Operación', entOp - salOp, false);
+        })()}
+        <div style="height:12px"></div>
+
+        <!-- ── ACTIVIDADES DE INVERSIÓN ── -->
+        <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:6px 0;border-bottom:2px solid var(--border2);margin-bottom:4px">
+          Flujo de Efectivo por Actividades de Inversión
+        </div>
+        <div style="font-family:var(--font-mono);font-size:.6rem;color:var(--accent2);text-transform:uppercase;letter-spacing:1px;padding:4px 0">Entradas de Inversión</div>
+        ${finRow('Venta de activos fijos', r.ventaActivosFijos||0, false,'pos')}
+        <div style="height:4px"></div>
+        <div style="font-family:var(--font-mono);font-size:.6rem;color:var(--accent4);text-transform:uppercase;letter-spacing:1px;padding:4px 0">Salidas de Inversión</div>
+        ${finRow('Compra de activos fijos / maquinaria', -(r.compraActivosFijos||0), false,'neg')}
+        ${(r.pagoInnovacionCapital||0)>0 ? finRow('Innovación capitalizable', -(r.pagoInnovacionCapital||0), false,'neg') : ''}
+        <div style="height:4px;border-top:1px dashed var(--border)"></div>
+        ${finRowSub('= Flujo Neto de Actividades de Inversión', (r.ventaActivosFijos||0)-(r.compraActivosFijos||0)-(r.pagoInnovacionCapital||0), false)}
+        <div style="height:12px"></div>
+
+        <!-- ── ACTIVIDADES DE FINANCIAMIENTO ── -->
+        <div style="font-family:var(--font-mono);font-size:.65rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:6px 0;border-bottom:2px solid var(--border2);margin-bottom:4px">
+          Flujo de Efectivo por Actividades de Financiamiento
+        </div>
+        <div style="font-family:var(--font-mono);font-size:.6rem;color:var(--accent2);text-transform:uppercase;letter-spacing:1px;padding:4px 0">Entradas de Financiamiento</div>
+        ${(r.ingresoPrestamo||0)>0 ? finRow('Ingreso por préstamo',   r.ingresoPrestamo||0, false,'pos') : ''}
+        ${(r.sobregiro||0)>0       ? finRow('Sobregiro tomado',        r.sobregiro||0,       false,'pos') : ''}
+        <div style="height:4px"></div>
+        <div style="font-family:var(--font-mono);font-size:.6rem;color:var(--accent4);text-transform:uppercase;letter-spacing:1px;padding:4px 0">Salidas de Financiamiento</div>
+        ${(r.pagoCapitalPrestamo||0)>0    ? finRow('Pago de capital préstamo',      -(r.pagoCapitalPrestamo||0),   false,'neg') : ''}
+        ${(r.pagoIntereses||r.interesesPrestamo||0)>0 ? finRow('Pago de intereses préstamo', -(r.pagoIntereses||r.interesesPrestamo||0), false,'neg') : ''}
+        ${(r.interesSobregiro||0)>0       ? finRow('Pago de intereses sobregiro',  -(r.interesSobregiro||0),      false,'neg') : ''}
+        ${(r.comisionApertura||0)>0       ? finRow('Pago de comisión de apertura', -(r.comisionApertura||0),      false,'neg') : ''}
+        <div style="height:4px;border-top:1px dashed var(--border)"></div>
+        ${(() => {
+          const entFin = (r.ingresoPrestamo||0)+(r.sobregiro||0);
+          const salFin = (r.pagoCapitalPrestamo||0)+(r.pagoIntereses||r.interesesPrestamo||0)+(r.interesSobregiro||0)+(r.comisionApertura||0);
+          return finRowSub('= Flujo Neto de Actividades de Financiamiento', entFin - salFin, false);
+        })()}
+        <div style="height:12px"></div>
+
+        <!-- ── RESUMEN ── -->
+        <div style="height:4px;border-top:2px solid var(--border2)"></div>
+        ${(() => {
+          const entOp = (r.cobrosContado||0);
+          const salOp = (r.pagoMPbruto||0)+(r.pagoComisiones||0)
+                       +(r.pagoOperarios2||r.pagoOperarios||0)+(r.costoVendedores||0)
+                       +(r.pagoMktTotal||0)+(r.pagoInnovacion||0)+(r.pagoCalidad||0)
+                       +(r.pagoGastosAdmin||r.pagoAdmin||r.gastoAdminFijo||0)
+                       +(r.pagoGastosPlanta||r.pagoPlanta||r.gastoFijoPlanta||0)
+                       +(r.pagoAlmacenamiento||r.pagoAlmacen||0)
+                       +(r.pagoIVAPeriodoAnterior||0)+(r.pagoIT??r.impuestoIT??0)+(r.pagoIUE||0);
+          const entFin = (r.ingresoPrestamo||0)+(r.sobregiro||0);
+          const salFin = (r.pagoCapitalPrestamo||0)+(r.pagoIntereses||r.interesesPrestamo||0)+(r.interesSobregiro||0)+(r.comisionApertura||0);
+          const entInv = (r.ventaActivosFijos||0);
+          const salInv = (r.compraActivosFijos||0)+(r.pagoInnovacionCapital||0);
+          const varNeta = (entOp - salOp) + (entInv - salInv) + (entFin - salFin);
+          return finRowSub('Aumento / Disminución Neta de Caja', varNeta, false);
+        })()}
+        <div style="height:4px"></div>
+        ${finRowSub('= CAJA FINAL', r.cajaFinal, true)}
+        ${(r.sobregiro||0)>0 ? '<div style="padding:6px 0;font-size:.76rem;color:var(--accent4)">⚠ Sobregiro activado: Bs ' + fmt.num(r.sobregiro) + ' · Interés: Bs ' + fmt.num(r.interesSobregiro||0) + '</div>' : ''}
+      </div>
+    </div>
+  </div>
+
+  <!-- Reporte Tributario -->
+  <div id="finTR" style="display:none">
+    <div class="result-round-card">
+      <div class="result-round-header">
+        <h3>📊 Reporte Gerencial Tributario — Ronda ${n}</h3>
+      </div>
+      <div style="padding:16px 20px;max-width:640px">
+        ${(() => {
+          const sec = (num, titulo) =>
+            '<div style="font-family:var(--font-mono);font-size:.65rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:6px 0 4px;border-bottom:2px solid var(--border2);margin:16px 0 8px">'
+            + num + '. ' + titulo + '</div>';
+          const rowT = (lbl, v, neg) => {
+            const val = neg ? -(v||0) : (v||0);
+            const col = val < 0 ? 'var(--accent4)' : 'var(--text1)';
+            return '<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border);font-size:.82rem">'
+              + '<span style="color:var(--text2)">' + lbl + '</span>'
+              + '<span style="font-family:var(--font-mono);color:' + col + '">'
+              + (val<0?'(':'' ) + 'Bs ' + Math.abs(Math.round(val)).toLocaleString('es') + (val<0?')':'')
+              + '</span></div>';
+          };
+          const rowSubT = (lbl, v, color) => {
+            const c = color || ((v||0)>=0?'var(--accent2)':'var(--accent4)');
+            return '<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:.84rem;font-weight:700;border-top:1px solid var(--border2);margin-top:2px">'
+              + '<span>' + lbl + '</span>'
+              + '<span style="font-family:var(--font-mono);color:'+c+'">Bs ' + Math.round(v||0).toLocaleString('es') + '</span></div>';
+          };
+          const badgeT = (lbl, v, tipo) => {
+            const c = tipo==='pos'?'var(--accent2)':tipo==='neg'?'var(--accent4)':'var(--accent3)';
+            return '<div style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:4px;background:rgba(255,255,255,.05);margin:4px 4px 4px 0;font-size:.78rem">'
+              + '<span style="color:var(--text3)">' + lbl + ':</span>'
+              + '<span style="font-family:var(--font-mono);font-weight:700;color:'+c+'">Bs ' + Math.round(v||0).toLocaleString('es') + '</span></div>';
+          };
+
+          const ivaDebito  = r.ivaDebito  || 0;
+          const ivaCredito = r.ivaCredito || 0;
+          const ivaAPagar  = r.ivaAPagar  || 0;
+          const ivaFavor   = ivaCredito > ivaDebito ? ivaCredito - ivaDebito : 0;
+          const itDet      = r.impuestoIT  || 0;
+          // totalFacturado: usar directo, o calcular desde IT (IT = totalFact × 3%)
+          const totalFact  = r.totalFacturado
+            || (itDet > 0 ? Math.round(itDet / 0.03) : 0)
+            || ((r.ventasBrutas||0) + ivaDebito);
+          const itComp     = r.compensacionIUE || 0;
+          const itPagar    = Math.max(0, itDet - itComp);
+          const utilAntesIT= (r.ebit||0) - (r.gastoFinanciero||0);
+          const iueDet     = r.impuestoIUE || 0;
+          const saldoIUE   = r.saldoIUEfinal || 0;
+          const pagoIVAAnt = r.pagoIVAPeriodoAnterior || 0;
+
+          return sec('1','IVA — Impuesto al Valor Agregado')
+            + rowT('IVA Débito Fiscal por ventas', ivaDebito)
+            + rowT('(−) IVA Crédito Fiscal por compras y gastos', ivaCredito, true)
+            + rowSubT('= IVA neto del período', ivaDebito - ivaCredito)
+            + '<div style="margin-top:6px">'
+            + (ivaAPagar > 0 ? badgeT('IVA por pagar', ivaAPagar, 'neg') : badgeT('IVA a favor', ivaFavor, 'pos'))
+            + '</div>'
+
+            + sec('2','IT — Impuesto a las Transacciones')
+            + rowT('Ventas facturadas del período (con IVA)', totalFact)
+            + rowT('× Alícuota IT (3%)', Math.round(totalFact * 0.03))
+            + rowSubT('= IT determinado', itDet)
+            + rowT('(−) Compensación con IUE pagado disponible', itComp, true)
+            + rowSubT('= IT por pagar en efectivo', itPagar)
+
+            + sec('3','IUE — Impuesto a las Utilidades de las Empresas')
+            + rowT('Utilidad antes de impuestos', utilAntesIT)
+            + rowT('(+/−) Ajustes tributarios', 0)
+            + rowSubT('= Utilidad imponible', utilAntesIT)
+            + rowT('× Alícuota IUE (25%)', utilAntesIT > 0 ? Math.round(utilAntesIT * 0.25) : 0)
+            + rowSubT('= IUE determinado (acumulado)', utilAntesIT > 0 ? Math.round(utilAntesIT * 0.25) : 0)
+            + '<div style="padding:4px 0 6px;font-size:.74rem;color:var(--accent3);font-style:italic">'
+            + 'ⓘ El IUE se liquida al cierre del año fiscal (R4 / R8 / R12). '
+            + 'El monto acumulado queda disponible para compensar IT en trimestres siguientes.'
+            + '</div>'
+            + rowT('IUE efectivamente pagado este período', iueDet)
+            + rowT('(−) Pagos a cuenta', 0, true)
+            + rowSubT('= IUE por pagar en efectivo este trimestre', Math.max(0, iueDet))
+
+            + sec('4','Saldo de IUE Compensable')
+            + rowT('IUE pagado en la gestión', iueDet)
+            + rowT('(−) IT compensado con IUE', itComp, true)
+            + rowSubT('= Saldo IUE disponible para compensar IT futuro', saldoIUE, 'var(--accent3)')
+
+            + sec('5','Resumen de Caja Tributaria')
+            + rowT('IVA período anterior pagado en efectivo', pagoIVAAnt)
+            + rowT('IT pagado en efectivo', itPagar)
+            + rowT('IUE pagado en efectivo', Math.max(0, iueDet))
+            + rowSubT('= Salida total de caja por impuestos', pagoIVAAnt + itPagar + Math.max(0, iueDet))
+
+            + sec('6','Situación Tributaria Final')
+            + '<div style="margin-top:8px;display:flex;flex-wrap:wrap;gap:6px">'
+            + badgeT('IVA ' + (ivaAPagar>0?'por pagar':'a favor'), ivaAPagar>0?ivaAPagar:ivaFavor, ivaAPagar>0?'neg':'pos')
+            + badgeT('IT por pagar', itPagar, itPagar>0?'neg':'pos')
+            + badgeT('IUE por pagar', Math.max(0,iueDet), iueDet>0?'neg':'pos')
+            + badgeT('Saldo IUE compensable', saldoIUE, 'pos')
+            + '</div>';
+        })()}
+      </div>
+    </div>
+  </div>`;
+};
+
+window.showFinTab = (tab) => {
+  ['pl','bg','fc','tr'].forEach(t => {
+    const el = document.getElementById(`fin${t.toUpperCase()}`);
+    if (el) el.style.display = t===tab ? '' : 'none';
+  });
+  const labels = {pl:'tabPL',bg:'tabBG',fc:'tabFC',tr:'tabTR'};
+  Object.entries(labels).forEach(([t,id]) => {
+    const btn = document.getElementById(id);
+    if (btn) { btn.style.background = t===tab?'var(--accent)':''; btn.style.color = t===tab?'#fff':''; }
+  });
+};
+
+window.mostrarRondaResultado = async (n, historial) => {
+  // Update active btn
+  document.querySelectorAll('#equipoResultadosContent .ronda-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.textContent.replace('Ronda ','')) === n);
+  });
+
+  if (!historial) {
+    const data = await api('GET','/api/resultados');
+    historial = data.historial;
+  }
+  const item = historial.find(h => h.ronda === n);
+  if (!item) return;
+  const r = item.resultado;
+
+  document.getElementById('resultadoRondaDetalle').innerHTML = `
+    <div class="result-round-card">
+      <div class="result-round-header">
+        <h3>Ronda ${n} — ${r.segmento} · ${r.tipoProducto}</h3>
+        <span style="font-size:.74rem;color:var(--text3)">${fmt.dt(item.ejecutadaAt)}</span>
+      </div>
+      <div class="kpi-grid">
+        <div>
+          <div class="kpi-row"><span class="kpi-label">Demanda estimada</span><span class="kpi-value">${fmt.num(r.demandaEstimada)} unid</span></div>
+          <div class="kpi-row"><span class="kpi-label">Ventas reales</span><span class="kpi-value warn">${fmt.num(r.ventasReales)} unid</span></div>
+          <div class="kpi-row"><span class="kpi-label">Inventario final</span><span class="kpi-value">${fmt.num(r.inventarioFinal)} unid</span></div>
+          <div class="kpi-row"><span class="kpi-label">Ingresos</span><span class="kpi-value">${fmt.bs(r.ingresos)}</span></div>
+          <div class="kpi-row"><span class="kpi-label">Costo de ventas</span><span class="kpi-value">${fmt.bs(r.costoVentas)}</span></div>
+          <div class="kpi-row"><span class="kpi-label">EBIT</span><span class="kpi-value ${r.ebit>=0?'up':'down'}">${fmt.bs(r.ebit)}</span></div>
+          <div class="kpi-row"><span class="kpi-label">Utilidad neta</span><span class="kpi-value ${r.utilidadNeta>=0?'up':'down'}">${fmt.bs(r.utilidadNeta)}</span></div>
+        </div>
+        <div>
+          <div class="kpi-row"><span class="kpi-label">Caja final</span><span class="kpi-value ${r.cajaFinal>=0?'up':'down'}">${fmt.bs(r.cajaFinal)} <span class="badge ${r.alertaCaja==='ALERTA'?'badge-alert':'badge-ok'}">${r.alertaCaja}</span></span></div>
+          <div class="kpi-row"><span class="kpi-label">CxC final</span><span class="kpi-value">${fmt.bs(r.cxcFinal)}</span></div>
+          <div class="kpi-row"><span class="kpi-label">Deuda final</span><span class="kpi-value">${fmt.bs(r.deudaFinal)}</span></div>
+          <div class="kpi-row"><span class="kpi-label">Market share seg.</span>
+            <div class="share-bar-wrap">
+              <div class="share-bar-bg"><div class="share-bar-fill" style="width:${Math.min(100,r.shareReal*100)}%"></div></div>
+              <span class="share-val">${fmt.pct(r.shareReal)}</span>
+            </div>
+          </div>
+          <div class="kpi-row"><span class="kpi-label">Costo unitario</span><span class="kpi-value">Bs ${fmt.d(r.costoUnitario,3)}</span></div>
+          <div class="kpi-row"><span class="kpi-label">ROI Marketing</span><span class="kpi-value ${r.roiMarketing>=1?'up':'down'}">${fmt.d(r.roiMarketing,2)}x</span></div>
+          <div class="kpi-row"><span class="kpi-label">Brand Equity</span><span class="kpi-value" style="color:var(--accent3)">${(r.brandEquityFinal ?? 50).toFixed(1)} <span style="font-size:.7rem;color:var(--text3)">pts</span></span></div>
+          <div class="kpi-row"><span class="kpi-label">Dotación (Op/Adm/Vend)</span><span class="kpi-value">${r.operarios}/${r.admins}/${r.vendedoresFinales}</span></div>
+        </div>
+      </div>
+    </div>
+    ${buildEvoChart(historial)}
+  `;
+  renderEvoCharts(historial);
+};
+
+function buildEvoChart(historial) {
+  if (historial.length < 2) return '';
+  return `<div class="charts-row" style="margin-top:16px">
+    <div class="chart-card"><h4>Evolución EBIT (Bs)</h4><div class="chart-wrap"><canvas id="chartEvo"></canvas></div></div>
+    <div class="chart-card"><h4>Evolución Caja (Bs)</h4><div class="chart-wrap"><canvas id="chartCajaEvo"></canvas></div></div>
+  </div>`;
+}
+
+function renderEvoCharts(historial) {
+  ['chartEvo','chartCajaEvo'].forEach(id => {
+    const c = document.getElementById(id);
+    if (!c) return;
+    const labels = historial.map(h => `R${h.ronda}`);
+    const defOpts = { responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}, scales:{x:{ticks:{color:'#9BA3C4',font:{family:'Space Mono',size:9}},grid:{color:'#2A2F45'}},y:{ticks:{color:'#9BA3C4',font:{family:'Space Mono',size:9}},grid:{color:'#2A2F45'}}} };
+    const isEBIT = id === 'chartEvo';
+    const values = historial.map(h => isEBIT ? h.resultado.ebit : h.resultado.cajaFinal);
+    new Chart(c, { type:'line', data:{ labels, datasets:[{data:values, borderColor:isEBIT?'#6C63FF':'#4ECDC4', backgroundColor:isEBIT?'rgba(108,99,255,.1)':'rgba(78,205,196,.1)', fill:true, tension:.3, pointRadius:4}]}, options:defOpts });
+  });
+}
+
+// ── Equipo Reportes ────────────────────────────────────────
+
+window.forzarConfirmacion = async (equipoId) => {
+  if (!confirm('¿Forzar confirmación de pre-simulación para este equipo?')) return;
+  try {
+    await api('POST', '/admin/presim/forzar', { equipoId });
+    toast('✅ Confirmación forzada', 'success');
+    await loadAdminDashboard();
+  } catch(e) { toast(e.message, 'error'); }
+};
+
+window.switchMapTab = (idx, total) => {
+  for (let i = 0; i < total; i++) {
+    const btn  = document.getElementById('tabMapSeg_' + i);
+    const pane = document.getElementById('paneMapSeg_' + i);
+    if (btn)  btn.className  = i === idx ? 'btn btn-primary btn-sm' : 'btn btn-ghost btn-sm';
+    if (pane) pane.style.display = i === idx ? '' : 'none';
+  }
+};
+
+window.mostrarReporteRonda = async (n, historialCache) => {
+  document.querySelectorAll('#reportesContent .ronda-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.textContent.replace('Ronda ',''))===n);
+  });
+  const det = document.getElementById('reporteDetalle');
+  if (!det) return;
+  try {
+    const [repData, resData] = await Promise.all([
+      api('GET', `/api/reportes/${n}`),
+      api('GET', '/api/resultados'),
+    ]);
+    const rep = repData.reportes;
+    const historial = historialCache || resData.historial;
+    const item = historial?.find(h=>h.ronda===n);
+    const miResult = item?.resultado;
+
+    let html = '';
+
+    // ── RANKING ANÓNIMO (siempre visible) ──────────────────
+    if (miResult) {
+      const allRes = await api('GET', `/api/dashboard/${n}`);
+      const posicion = allRes.ranking.findIndex(r=>r.esYo) + 1;
+      const total = allRes.ranking.length;
+      const rows = allRes.ranking.map((r,i) => `
+        <tr style="${r.esYo?'background:rgba(108,99,255,.08);font-weight:700':''}">
+          <td style="text-align:center;font-family:var(--font-mono)">${i+1}</td>
+          <td>${r.esYo?'⭐ <strong>Mi equipo</strong>':'Equipo '+(i+1)}</td>
+          <td class="num ${r.utilidadNeta>=0?'pos':'neg'}">${fmt.bs(r.utilidadNeta)}</td>
+          <td class="num">${fmt.num(r.ventas)}</td>
+          <td class="num">${fmt.pct(r.share)}</td>
+          <td class="num ${r.caja<=0?'neg':'pos'}">${fmt.bs(r.caja)}</td>
+        </tr>`).join('');
+      html += `
+        <div class="result-round-card" style="margin-bottom:16px">
+          <div class="result-round-header">
+            <h3>🏆 Ranking — Ronda ${n}</h3>
+            <span class="badge ${posicion===1?'badge-ok':'badge-pending'}">Tu posición: ${posicion}/${total}</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Equipo</th><th>Utilidad neta</th><th>Ventas (unid)</th><th>Market share</th><th>Caja final</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          <p style="padding:8px 16px;font-size:.74rem;color:var(--text3)">Los demás equipos aparecen anónimos. Para ver participación detallada, compra el reporte Premium.</p>
+        </div>`;
+    }
+
+    // ── INVESTIGACIÓN COMPRADA ─────────────────────────
+    if (!rep.investigacion) {
+      html += '<div class="result-round-card">'
+        + '<div class="result-round-header"><h3>📊 Investigación de Mercado — Ronda ' + n + '</h3></div>'
+        + '<div style="padding:24px;text-align:center;color:var(--text3)">'
+        + '<div style="font-size:2rem;margin-bottom:10px">📭</div>'
+        + '<p style="margin-bottom:10px">No compraste reporte de investigación en la ronda ' + n + '.</p>'
+        + '<p style="font-size:.78rem">Puedes comprar <strong>Básico (Bs 5,000)</strong>, '
+        + '<strong>Premium (Bs 12,000)</strong> o <strong>Estratégico (Bs 20,000)</strong> en tu próxima hoja de decisión.</p>'
+        + '</div></div>';
+    } else {
+      const inv = rep.investigacion;
+
+      // Tabla de mercado
+      const mktRows = (inv.mercado||[]).map(s =>
+        '<tr>'
+        + '<td><strong>' + s.segmento + '</strong></td>'
+        + '<td class="num">' + fmt.num(s.demandaBase||0) + '</td>'
+        + '<td class="num pos">' + fmt.num(s.mercadoFormal||s.demandaFormal||0) + '</td>'
+        + '<td><span class="badge ' + (s.tendencia==='Alto crecimiento'?'badge-high':s.tendencia==='Creciente'?'badge-grow':'badge-stable') + '">'
+        + (s.tendencia||'Estable') + '</span></td>'
+        + '</tr>'
+      ).join('');
+
+      const precRows = (inv.precios||[]).map(s =>
+        '<tr>'
+        + '<td><strong>' + s.segmento + '</strong></td>'
+        + '<td class="num">' + (s.precioMin!=null?'Bs '+s.precioMin:'—') + '</td>'
+        + '<td class="num">' + (s.precioProm!=null?'Bs '+s.precioProm:'—') + '</td>'
+        + '<td class="num">' + (s.precioMax!=null?'Bs '+s.precioMax:'—') + '</td>'
+        + '</tr>'
+      ).join('');
+
+      const alertasHTML = (inv.alertas||[]).map(a =>
+        '<li style="padding:5px 0;border-bottom:1px solid var(--border);font-size:.82rem;color:var(--accent3)">⚠ ' + a + '</li>'
+      ).join('');
+
+      html += '<div class="result-round-card" style="margin-bottom:16px">'
+        + '<div class="result-round-header"><h3>📊 ' + (inv.titulo||'Reporte') + ' — Ronda ' + n + '</h3></div>'
+        + '<div style="padding:16px 20px">'
+        + '<p style="font-family:var(--font-mono);font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Tamaño de Mercado</p>'
+        + '<div class="table-wrap" style="margin-bottom:16px"><table>'
+        + '<thead><tr><th>Segmento</th><th>Demanda base</th><th>Mercado formal</th><th>Tendencia</th></tr></thead>'
+        + '<tbody>' + mktRows + '</tbody></table></div>'
+        + '<p style="font-family:var(--font-mono);font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:10px">Precios Observados</p>'
+        + '<div class="table-wrap" style="margin-bottom:16px"><table>'
+        + '<thead><tr><th>Segmento</th><th>Precio mínimo</th><th>Precio promedio</th><th>Precio máximo</th></tr></thead>'
+        + '<tbody>' + precRows + '</tbody></table></div>'
+        + '<p style="font-family:var(--font-mono);font-size:.65rem;text-transform:uppercase;letter-spacing:1px;color:var(--text3);margin-bottom:8px">Alertas</p>'
+        + '<ul style="list-style:none;padding:0">' + alertasHTML + '</ul>'
+        + '</div></div>';
+
+      // PREMIUM — participación y sensibilidad
+      if (inv.tipo === 'Premium' || inv.tipo === 'Estratégico') {
+        const partRows = (inv.participacion||[]).map(p =>
+          '<tr>'
+          + '<td><strong>' + p.segmento + '</strong></td>'
+          + '<td class="num">' + p.equiposCompitiendo + '</td>'
+          + '<td class="num">' + fmt.pct(p.shareMaximo) + '</td>'
+          + '<td class="num">' + fmt.pct(p.sharePromedio) + '</td>'
+          + '</tr>'
+        ).join('');
+        const sensRows = (inv.sensibilidad||[]).map(s =>
+          '<tr>'
+          + '<td><strong>' + s.segmento + '</strong></td>'
+          + '<td>' + s.precio + '</td><td>' + s.calidad + '</td>'
+          + '<td>' + s.publicidad + '</td><td>' + s.canal + '</td>'
+          + '</tr>'
+        ).join('');
+        html += '<div class="result-round-card" style="margin-bottom:16px">'
+          + '<div class="result-round-header"><h3>📊 Premium — Participación y Sensibilidad</h3></div>'
+          + '<div style="padding:14px 18px">'
+          + '<p style="font-family:var(--font-mono);font-size:.65rem;text-transform:uppercase;color:var(--accent);margin-bottom:8px">Participación de Mercado</p>'
+          + '<div class="table-wrap" style="margin-bottom:14px"><table>'
+          + '<thead><tr><th>Segmento</th><th>Equipos</th><th>Share máx.</th><th>Share prom.</th></tr></thead>'
+          + '<tbody>' + partRows + '</tbody></table></div>'
+          + '<p style="font-family:var(--font-mono);font-size:.65rem;text-transform:uppercase;color:var(--accent);margin-bottom:8px">Sensibilidad del Consumidor</p>'
+          + '<div class="table-wrap"><table>'
+          + '<thead><tr><th>Segmento</th><th>Precio</th><th>Calidad</th><th>Publicidad</th><th>Canal</th></tr></thead>'
+          + '<tbody>' + sensRows + '</tbody></table></div>'
+          + '</div></div>';
+      }
+
+      // PREMIUM — Sección 1: empresas anónimas
+      if ((inv.tipo === 'Premium' || inv.tipo === 'Estratégico') && (inv.empresasAnonimas||[]).length) {
+        const empAnonRows = (inv.empresasAnonimas||[]).map(e =>
+          '<tr>'
+          + '<td><strong>' + e.etiqueta + '</strong></td>'
+          + '<td style="text-align:center">' + e.nProductos + '</td>'
+          + '<td style="font-size:.8rem">' + (e.segmentos||[]).join('<br>') + '</td>'
+          + '<td class="num">Bs ' + (e.precioMin||0) + ' – Bs ' + (e.precioMax||0) + '</td>'
+          + '<td class="num pos">' + fmt.pct(e.shareTotal||0) + '</td>'
+          + '<td class="num">' + fmt.num(e.ventasTotales||0) + '</td>'
+          + '</tr>'
+        ).join('');
+        html += '<div class="result-round-card" style="margin-bottom:16px">'
+          + '<div class="result-round-header"><h3>🏢 Sección 1 · Empresas en el Mercado (Anónimas)</h3></div>'
+          + '<div style="padding:14px 18px">'
+          + '<p style="font-size:.78rem;color:var(--text3);margin-bottom:10px">Los nombres se revelan en el Reporte Estratégico.</p>'
+          + '<div class="table-wrap"><table>'
+          + '<thead><tr><th>Empresa</th><th>Productos</th><th>Segmentos</th><th>Rango precio</th><th>Share total</th><th>Ventas</th></tr></thead>'
+          + '<tbody>' + empAnonRows + '</tbody></table></div>'
+          + '</div></div>';
+      }
+
+      // ESTRATÉGICO — Sección 1: empresas con nombre
+      if (inv.tipo === 'Estratégico' && (inv.empresasConNombre||[]).length) {
+        const empNomRows = (inv.empresasConNombre||[]).map(e => {
+          const prods = (e.productos||[]).map(p =>
+            '<div style="margin-bottom:5px"><strong>' + (p.producto||'—') + '</strong>'
+            + ' <span style="color:var(--text3);font-size:.74rem">· ' + (p.segmento||'—') + '</span>'
+            + '<div style="font-size:.73rem;color:var(--text3)">Bs ' + (p.precio||0)
+            + ' · Cal ' + (p.calidad||0)
+            + ' · ' + fmt.pct(p.share||0) + ' share'
+            + ' · ' + fmt.num(p.ventas||0) + ' unid</div></div>'
+          ).join('');
+          return '<tr>'
+            + '<td><strong>' + (e.empresa||'—') + '</strong></td>'
+            + '<td>' + prods + '</td>'
+            + '<td class="num pos">' + fmt.pct(e.shareTotal||0) + '</td>'
+            + '<td class="num">' + fmt.num(e.ventasTotales||0) + '</td>'
+            + '<td class="num ' + ((e.utilidadNeta||0)>=0?'pos':'neg') + '">' + fmt.bs(e.utilidadNeta||0) + '</td>'
+            + '</tr>';
+        }).join('');
+        html += '<div class="result-round-card" style="margin-bottom:16px">'
+          + '<div class="result-round-header" style="background:linear-gradient(135deg,#2a1f6e,#4a2080)">'
+          + '<h3>🔍 Estratégico · Sección 1 — Empresas y Productos con Nombre</h3></div>'
+          + '<div style="padding:14px 18px"><div class="table-wrap"><table>'
+          + '<thead><tr><th>Empresa</th><th>Productos</th><th>Share total</th><th>Ventas</th><th>Utilidad neta</th></tr></thead>'
+          + '<tbody>' + empNomRows + '</tbody></table></div></div></div>';
+      }
+
+      // ESTRATÉGICO — Sección 3: Mapas de posicionamiento por segmento
+      if (inv.tipo === 'Estratégico') {
+        const mapas = inv.mapasPorSegmento || {};
+        const segNames = Object.keys(mapas).filter(s => (mapas[s].puntos||[]).length > 0);
+
+        if (segNames.length > 0) {
+          const PALETTE = ['#3B82F6','#10B981','#F59E0B','#EF4444','#8B5CF6','#EC4899','#06FFA5','#84CC16','#F97316'];
+
+          // Función SVG para un segmento
+          const renderMapaSeg = (segNombre, datos) => {
+            const puntos  = datos.puntos  || [];
+            const externos = datos.externos || [];
+            if (!puntos.length) return '';
+
+            const W = 500; const H = 320;
+            const PAD = { top:36, right:24, bot:52, left:64 };
+            const cW = W - PAD.left - PAD.right;
+            const cH = H - PAD.top  - PAD.bot;
+
+            const allPrecios  = [...puntos.map(p=>p.precio),  ...externos.map(e=>e.precio)].filter(v=>v>0);
+            const allCalidad  = [...puntos.map(p=>p.calidad), ...externos.map(e=>e.calidad)].filter(v=>v>0);
+            const maxPrecio   = allPrecios.length  ? Math.max(...allPrecios)  * 1.1 : 500;
+            const minPrecio   = allPrecios.length  ? Math.max(0, Math.min(...allPrecios) * 0.85) : 0;
+            const rangoPrecio = Math.max(maxPrecio - minPrecio, 1);
+
+            const cx = p => PAD.left + ((p - minPrecio) / rangoPrecio) * cW;
+            const cy = q => PAD.top  + (1 - q / 10) * cH;
+            const cr = s => 7 + Math.min(s * 80, 28);
+
+            const midX = PAD.left + cW / 2;
+            const midY = PAD.top  + cH / 2;
+
+            // Precio promedio del segmento (línea de referencia)
+            const precioMed = allPrecios.length ? allPrecios.reduce((a,b)=>a+b,0)/allPrecios.length : 0;
+            const xMed = cx(precioMed);
+
+            // Círculos de empresas
+            const circles = puntos.map(p => {
+              const r   = cr(p.share);
+              const x   = Math.round(cx(p.precio));
+              const y   = Math.round(cy(p.calidad));
+              const tip = p.empresa + ' · ' + p.producto + ' · Share: ' + (p.share*100).toFixed(1) + '%';
+              return '<circle cx="'+x+'" cy="'+y+'" r="'+r+'" fill="'+p.color+'" fill-opacity="0.75" stroke="'+p.color+'" stroke-width="2"><title>'+tip+'</title></circle>'
+                + '<text x="'+x+'" y="'+(y-r-4)+'" text-anchor="middle" font-size="8.5" fill="#E2E8F0" font-weight="600">'+p.empresa.substring(0,9)+'</text>'
+                + '<text x="'+x+'" y="'+(y+r+11)+'" text-anchor="middle" font-size="7.5" fill="#94A3B8">'+p.producto.substring(0,12)+'</text>';
+            }).join('');
+
+            // Diamantes de competencia externa
+            const diamonds = externos.map(e => {
+              const x = Math.round(cx(e.precio));
+              const y = Math.round(cy(e.calidad));
+              const s = 9;
+              const tip = e.nombre + ' (externo) · Part.ref: '+(e.share*100).toFixed(0)+'%';
+              return '<polygon points="'+x+','+(y-s)+' '+(x+s)+','+y+' '+x+','+(y+s)+' '+(x-s)+','+y+'" fill="#F97316" fill-opacity="0.8" stroke="#FB923C" stroke-width="1.5"><title>'+tip+'</title></polygon>'
+                + '<text x="'+x+'" y="'+(y-s-4)+'" text-anchor="middle" font-size="8" fill="#FB923C">'+e.nombre.substring(0,16)+'</text>';
+            }).join('');
+
+            // Ticks eje X (precio)
+            const nTicksX = 5;
+            const xTicks = Array.from({length:nTicksX+1},(_,i)=>i/nTicksX).map(pct => {
+              const val = Math.round(minPrecio + pct * rangoPrecio);
+              const xp  = PAD.left + pct * cW;
+              return '<line x1="'+xp+'" y1="'+(PAD.top+cH)+'" x2="'+xp+'" y2="'+(PAD.top+cH+5)+'" stroke="#475569" stroke-width="1"/>'
+                + '<text x="'+xp+'" y="'+(PAD.top+cH+16)+'" text-anchor="middle" font-size="8.5" fill="#94A3B8">'+val+'</text>';
+            }).join('');
+
+            // Ticks eje Y (calidad)
+            const yTicks = [0,2,4,6,8,10].map(q => {
+              const yp = PAD.top + (1-q/10)*cH;
+              return '<line x1="'+(PAD.left-5)+'" y1="'+yp+'" x2="'+PAD.left+'" y2="'+yp+'" stroke="#475569" stroke-width="1"/>'
+                + '<text x="'+(PAD.left-8)+'" y="'+(yp+3)+'" text-anchor="end" font-size="8.5" fill="#94A3B8">'+q+'</text>';
+            }).join('');
+
+            // Línea de precio promedio
+            const lineaMed = xMed > PAD.left && xMed < PAD.left+cW
+              ? '<line x1="'+xMed+'" y1="'+PAD.top+'" x2="'+xMed+'" y2="'+(PAD.top+cH)+'" stroke="#F59E0B" stroke-width="1" stroke-dasharray="5,3" opacity="0.6"/>'
+                + '<text x="'+xMed+'" y="'+(PAD.top-6)+'" text-anchor="middle" font-size="7.5" fill="#F59E0B">precio prom.</text>'
+              : '';
+
+            const tendColor = datos.tendencia==='Alto crecimiento'?'#10B981':datos.tendencia==='Creciente'?'#3B82F6':'#94A3B8';
+            const demStr   = datos.demandaFormal ? ' · Demanda formal: '+Math.round(datos.demandaFormal).toLocaleString('es-BO')+' unidades' : '';
+
+            return '<svg viewBox="0 0 '+W+' '+H+'" xmlns="http://www.w3.org/2000/svg" style="width:100%;max-width:'+W+'px;background:#0F172A;border-radius:8px;display:block">'
+              // Fondos de cuadrante
+              + '<rect x="'+PAD.left+'" y="'+PAD.top+'" width="'+(cW/2)+'" height="'+(cH/2)+'" fill="rgba(16,185,129,.04)"/>'
+              + '<rect x="'+(PAD.left+cW/2)+'" y="'+PAD.top+'" width="'+(cW/2)+'" height="'+(cH/2)+'" fill="rgba(59,130,246,.04)"/>'
+              + '<rect x="'+PAD.left+'" y="'+(PAD.top+cH/2)+'" width="'+(cW/2)+'" height="'+(cH/2)+'" fill="rgba(239,68,68,.04)"/>'
+              + '<rect x="'+(PAD.left+cW/2)+'" y="'+(PAD.top+cH/2)+'" width="'+(cW/2)+'" height="'+(cH/2)+'" fill="rgba(251,191,36,.04)"/>'
+              // Líneas de cuadrante
+              + '<line x1="'+midX+'" y1="'+PAD.top+'" x2="'+midX+'" y2="'+(PAD.top+cH)+'" stroke="#334155" stroke-width="1" stroke-dasharray="4,3"/>'
+              + '<line x1="'+PAD.left+'" y1="'+midY+'" x2="'+(PAD.left+cW)+'" y2="'+midY+'" stroke="#334155" stroke-width="1" stroke-dasharray="4,3"/>'
+              // Línea precio promedio
+              + lineaMed
+              // Ejes
+              + '<line x1="'+PAD.left+'" y1="'+PAD.top+'" x2="'+PAD.left+'" y2="'+(PAD.top+cH)+'" stroke="#475569" stroke-width="1.5"/>'
+              + '<line x1="'+PAD.left+'" y1="'+(PAD.top+cH)+'" x2="'+(PAD.left+cW)+'" y2="'+(PAD.top+cH)+'" stroke="#475569" stroke-width="1.5"/>'
+              + xTicks + yTicks
+              // Etiquetas ejes
+              + '<text x="'+(PAD.left+cW/2)+'" y="'+(H-4)+'" text-anchor="middle" font-size="9.5" fill="#94A3B8">Precio de venta (Bs)</text>'
+              + '<text x="13" y="'+(PAD.top+cH/2)+'" text-anchor="middle" font-size="9.5" fill="#94A3B8" transform="rotate(-90,13,'+(PAD.top+cH/2)+')">Calidad (0–10)</text>'
+              // Etiquetas cuadrantes
+              + '<text x="'+(PAD.left+8)+'" y="'+(PAD.top+13)+'" font-size="7.5" fill="#475569" font-style="italic">Alta calidad / Bajo precio</text>'
+              + '<text x="'+(PAD.left+cW/2+6)+'" y="'+(PAD.top+13)+'" font-size="7.5" fill="#475569" font-style="italic">Alta calidad / Alto precio</text>'
+              + '<text x="'+(PAD.left+8)+'" y="'+(PAD.top+cH-5)+'" font-size="7.5" fill="#475569" font-style="italic">Baja calidad / Bajo precio</text>'
+              + '<text x="'+(PAD.left+cW/2+6)+'" y="'+(PAD.top+cH-5)+'" font-size="7.5" fill="#475569" font-style="italic">Baja calidad / Alto precio</text>'
+              // Datos
+              + circles + diamonds
+              + '</svg>'
+              + '<div style="margin-top:8px;font-size:.74rem;color:var(--text3)">'
+              + '<span style="color:'+tendColor+'">● '+datos.tendencia+'</span>'
+              + demStr
+              + (externos.length ? ' &nbsp;·&nbsp; <span style="color:#FB923C">◆ Competencia externa</span>' : '')
+              + ' &nbsp;·&nbsp; Tamaño del círculo = market share'
+              + '</div>';
+          };
+
+          // Leyenda global de empresas
+          const legendaEmpresas = (inv.empresasConNombre||[]).map((e,ei) =>
+            '<span style="display:inline-flex;align-items:center;gap:5px;margin:2px 12px 2px 0;font-size:.77rem">'
+            + '<span style="width:9px;height:9px;border-radius:50%;background:'+PALETTE[ei%9]+';display:inline-block"></span>'
+            + e.empresa+'</span>'
+          ).join('') + '<span style="display:inline-flex;align-items:center;gap:5px;margin:2px 12px 2px 0;font-size:.77rem">'
+            + '<span style="display:inline-block;width:9px;height:9px;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%);background:#F97316"></span>'
+            + 'Competencia externa</span>';
+
+          // Tabs de segmentos
+          const tabsBar = '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:12px;border-bottom:1px solid var(--border);padding-bottom:8px">'
+            + segNames.map((s,i) =>
+                '<button class="btn '+(i===0?'btn-primary':'btn-ghost')+' btn-sm" id="tabMapSeg_'+i+'" onclick="switchMapTab('+i+','+segNames.length+')">'
+                + s + '</button>'
+              ).join('')
+            + '</div>';
+
+          // Paneles SVG por segmento
+          const panesHTML = segNames.map((s,i) =>
+            '<div id="paneMapSeg_'+i+'" '+(i>0?'style="display:none"':'')+'>'
+            + renderMapaSeg(s, mapas[s])
+            + '</div>'
+          ).join('');
+
+          html += '<div class="result-round-card" style="margin-bottom:16px">'
+            + '<div class="result-round-header" style="background:linear-gradient(135deg,#1a3a6b,#2a5599)">'
+            + '<h3>📍 Estratégico · Sección 3 — Mapa de Posicionamiento por Segmento</h3></div>'
+            + '<div style="padding:14px 18px">'
+            + '<p style="font-size:.78rem;color:var(--text3);margin-bottom:12px">'
+            + 'Precio vs Calidad para cada segmento. Muestra solo los competidores activos en ese mercado. '
+            + 'La línea amarilla es el precio promedio del segmento.</p>'
+            + '<div style="margin-bottom:12px;flex-wrap:wrap;display:flex">' + legendaEmpresas + '</div>'
+            + tabsBar + panesHTML
+            + '</div></div>';
+        }
+      }
+
+            // ESTRATÉGICO — Sección 2: elasticidad precio
+      if (inv.tipo === 'Estratégico') {
+        const colores = { verde:'var(--accent5)', ambar:'var(--accent3)', roja:'var(--accent4)' };
+        let elHTML = '';
+        if ((inv.elasticidades||[]).length) {
+          const elRows = (inv.elasticidades||[]).map(e =>
+            '<tr>'
+            + '<td><strong>' + e.empresa + '</strong></td>'
+            + '<td>' + e.producto + '</td>'
+            + '<td style="font-size:.75rem">' + e.segmento + '</td>'
+            + '<td class="num">Bs ' + e.precioAnt + ' → ' + e.precioAct + '</td>'
+            + '<td class="num">' + fmt.num(e.ventasAnt) + ' → ' + fmt.num(e.ventasAct) + '</td>'
+            + '<td class="num" style="font-weight:700;color:' + (colores[e.color]||'var(--text)') + '">' + e.elasticidad + '</td>'
+            + '<td style="color:' + (colores[e.color]||'var(--text)') + ';font-size:.78rem">' + e.interpretacion + '</td>'
+            + '</tr>'
+          ).join('');
+          elHTML = '<div class="table-wrap"><table>'
+            + '<thead><tr><th>Empresa</th><th>Producto</th><th>Segmento</th><th>Precio</th><th>Ventas</th><th>ε</th><th>Interpretación</th></tr></thead>'
+            + '<tbody>' + elRows + '</tbody></table></div>';
+        } else {
+          elHTML = '<p style="color:var(--text3);font-size:.8rem;padding:10px 0">Elasticidad no disponible — requiere al menos 2 rondas con cambio de precio.</p>';
+        }
+        html += '<div class="result-round-card" style="margin-bottom:16px">'
+          + '<div class="result-round-header" style="background:linear-gradient(135deg,#2a1f6e,#4a2080)">'
+          + '<h3>📐 Estratégico · Sección 2 — Elasticidad Precio Empírica</h3></div>'
+          + '<div style="padding:14px 18px">' + elHTML + '</div></div>';
+      }
+    } // cierra else investigacion comprada
+    document.getElementById('reporteDetalle').innerHTML = html;
+  } catch(e) {
+    document.getElementById('reporteDetalle').innerHTML = `<p style="color:var(--accent4);padding:16px">${e.message}</p>`;
+  }
+};
+
+// ── Créditos del Equipo ────────────────────────────────────
+// ─── Mis Inventarios ─────────────────────────────────────────
+async function loadEquipoInventarios() {
+  const el = document.getElementById('eq-inventarios-content');
+  if (!el) return;
+  el.innerHTML = '<p style="padding:20px;color:var(--text3)">Cargando inventarios...</p>';
+
+  const data = await api('GET','/api/resultados');
+  if (!data.historial?.length) {
+    el.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>Sin rondas simuladas aún.</p></div>';
+    return;
+  }
+
+  // Kardex por producto usando EXCLUSIVAMENTE el bloque "inventarios" del backend (datos reales).
+  const historial = data.historial;
+  const productoMap = {}; // productoId → { nombre, rondas:[{ronda, inv}] }
+  historial.forEach(h => {
+    const r = h.resultado;
+    if (!r) return;
+    const prods = r.productos?.length > 1 ? r.productos : [r];
+    prods.forEach(p => {
+      const pid  = p.productoId || 'prod_1';
+      const pnom = p.producto   || 'Producto Principal';
+      if (!productoMap[pid]) productoMap[pid] = { nombre: pnom, rondas: [] };
+      productoMap[pid].rondas.push({ ronda: h.ronda, inv: p.inventarios || {} });
+    });
+  });
+
+  const num = (x) => (Number(x) || 0).toLocaleString('es');           // unidades físicas
+  const bs  = (x) => 'Bs ' + Math.round(Number(x) || 0).toLocaleString('es');  // valor monetario
+  const secH = (titulo) =>
+    '<div style="font-family:var(--font-mono);font-size:.65rem;color:var(--accent3);text-transform:uppercase;' +
+    'letter-spacing:1px;padding:6px 0 4px;border-bottom:2px solid var(--border2);margin:16px 0 8px">' + titulo + '</div>';
+  const th = (arr) => '<thead><tr style="background:rgba(255,255,255,.04)">' + arr.map(t =>
+    '<th style="padding:5px 8px;text-align:right;font-size:.62rem;color:var(--text3);text-transform:uppercase">' + t + '</th>'
+    ).join('') + '</tr></thead>';
+  const td = (v, extra) => '<td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)' + (extra||'') + '">' + v + '</td>';
+
+  let html = '<div style="padding:16px 20px">';
+
+  Object.entries(productoMap).forEach(([pid, prod]) => {
+    const ult = prod.rondas[prod.rondas.length - 1]?.inv || {};
+    const inconsistente = prod.rondas.some(rr => rr.inv?.mpInconsistente);
+
+    html += '<div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--r);padding:12px 16px;margin-bottom:16px">';
+    html += '<div style="font-weight:700;font-size:.82rem;margin-bottom:6px">' + prod.nombre + '</div>';
+
+    // ── Sección A: Producto Terminado ──
+    html += secH('🏭 Producto Terminado (unidades)');
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.78rem">';
+    html += th(['Ronda','Inv. inicial','Producción','Ventas','Inv. final','Valor final','Almacenam.']) + '<tbody>';
+    prod.rondas.forEach(rr => {
+      const inv = rr.inv;
+      const color = (Number(inv.inventarioPTFinal)||0) > (Number(inv.ventas)||0) * 2 ? ';color:var(--accent4)' : '';
+      html += '<tr style="border-bottom:1px solid var(--border)">' +
+        td('R' + rr.ronda, ';color:var(--accent3)') +
+        td(num(inv.inventarioPTInicial)) +
+        td(num(inv.produccion), ';color:var(--accent2)') +
+        td(num(inv.ventas)) +
+        td(num(inv.inventarioPTFinal), ';font-weight:700' + color) +
+        td(bs(inv.valorInventarioPT)) +
+        td(bs(inv.costoAlmacenamiento), ';color:var(--accent4)') +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    // ── Sección B: Materia Prima ──
+    html += secH('🧱 Materia Prima (unidades)');
+    html += '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.78rem">';
+    html += th(['Ronda','Stock inicial','Entregas recib.','Compras','Consumo','Stock final','Valor stock']) + '<tbody>';
+    prod.rondas.forEach(rr => {
+      const inv = rr.inv;
+      const flag = inv.mpInconsistente ? ' <span title="La identidad de MP no cuadra" style="color:var(--accent4)">⚠</span>' : '';
+      html += '<tr style="border-bottom:1px solid var(--border)">' +
+        td('R' + rr.ronda, ';color:var(--accent3)') +
+        td(num(inv.stockMPInicial)) +
+        td(num(inv.entregasMPRecibidas), ';color:var(--accent2)') +
+        td(num(inv.comprasMPRealizadas)) +
+        td(num(inv.consumoMP)) +
+        td(num(inv.stockMPFinal) + flag, ';font-weight:700') +
+        td(bs(inv.valorStockMP)) +
+        '</tr>';
+    });
+    html += '</tbody></table></div>';
+
+    // Pedidos de MP en tránsito (de la última ronda)
+    const peds = Array.isArray(ult.pedidosPendientes) ? ult.pedidosPendientes : [];
+    html += '<div style="margin-top:8px;font-size:.75rem;color:var(--text3)">';
+    if (peds.length) {
+      html += '📦 Pedidos de MP en tránsito: ' + peds.map(pd =>
+        '<b>' + num(pd.cantidad) + ' u</b> → llega R' + pd.rondaEntrega +
+        ((Number(pd.costoMP)||0) > 0 ? ' (' + bs(pd.costoMP) + ')' : '')
+      ).join(' · ');
+    } else {
+      html += 'Sin pedidos pendientes.';
+    }
+    html += '</div>';
+
+    // Aviso de inconsistencia (solo si la identidad MP no cuadra en alguna ronda)
+    if (inconsistente) {
+      html += '<div style="margin-top:8px;padding:8px 12px;background:rgba(255,107,107,.08);border-radius:var(--r);' +
+        'font-size:.74rem;color:var(--accent4)">⚠ Inconsistencia de continuidad de MP detectada en alguna ronda ' +
+        '(stock final no coincide con stock inicial + entregas − consumo). Revisar recálculo.</div>';
+    }
+
+    html += '<div style="margin-top:10px;font-size:.75rem;color:var(--text3)">Stock MP actual: <b>' +
+      num(ult.stockMPFinal) + ' u.</b> · Valor: <b>' + bs(ult.valorStockMP) + '</b></div>';
+    html += '</div>';
+  });
+
+  html += '</div>';
+  el.innerHTML = html;
+}
+
+async function loadEquipoCreditos() {
+  const el = document.getElementById('eq-creditos-content');
+  if (!el) return;
+  el.innerHTML = `<div style="padding:20px;text-align:center;color:var(--text3)">Cargando...</div>`;
+  try {
+    const data = await api('GET', '/api/resultados');
+    renderCreditosEquipo(el, data.historial || [], data.currentRound, data.roundState);
+  } catch(e) {
+    el.innerHTML = `<p style="color:var(--accent4);padding:16px">${e.message}</p>`;
+  }
+}
+
+function renderCreditosEquipo(el, historial, currentRound, roundState) {
+  if (!historial.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🏦</div><p>Sin rondas simuladas aún.</p></div>`;
+    return;
+  }
+
+  // Datos REALES del backend (bloque resultado.creditos). Sin tasas/comisiones hardcodeadas,
+  // sin cronograma proyectado: se muestra el movimiento real de deuda financiera por ronda.
+  const rondas = historial
+    .map(item => ({ ronda: item.ronda, c: item.resultado?.creditos }))
+    .filter(x => x.c);
+
+  if (!rondas.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🏦</div><p>Sin datos de crédito disponibles.</p></div>`;
+    return;
+  }
+
+  const pct = (x) => (x == null ? '—' : fmt.pct(x));
+  const ult = rondas[rondas.length - 1].c;
+  const costoAcum = rondas.reduce((s, x) => s + (Number(x.c.costoFinancieroTotal) || 0), 0);
+  const hayActividad = rondas.some(x => (x.c.desembolsoCredito > 0) || (x.c.sobregiroUtilizado > 0) || (x.c.deudaFinancieraFinal > 0));
+
+  if (!hayActividad) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">✅</div><p>Sin deuda financiera, préstamos ni sobregiros registrados.</p></div>`;
+    return;
+  }
+
+  // Accesores con nombres nuevos + fallback legacy
+  const dIni = (c) => c.deudaFinancieraInicial ?? c.deudaInicial ?? 0;
+  const pCap = (c) => c.pagoVoluntarioCapital ?? c.pagoCapital ?? 0;
+  const plz  = (c) => c.plazoSolicitado ?? c.plazoCredito ?? null;
+
+  // ── Tabla de movimiento real por ronda ──
+  const movRows = rondas.map(({ ronda, c }) => {
+    const flag = c.movInconsistente ? ' <span title="La identidad de deuda no cuadra" style="color:var(--accent4)">⚠</span>' : '';
+    return `<tr>
+      <td style="text-align:center;font-family:var(--font-mono);color:var(--accent3)">R${ronda}</td>
+      <td class="num">${fmt.bs(dIni(c))}</td>
+      <td class="num" style="color:var(--accent2)">${fmt.bs(c.desembolsoCredito)}</td>
+      <td class="num" style="color:var(--accent4)">${fmt.bs(c.sobregiroUtilizado)}</td>
+      <td class="num" style="color:var(--accent4)">${fmt.bs(c.interesSobregiro)}</td>
+      <td class="num">${fmt.bs(pCap(c))}</td>
+      <td class="num" style="font-weight:700">${fmt.bs(c.deudaFinancieraFinal)}${flag}</td>
+    </tr>`;
+  }).join('');
+
+  // ── Alertas pedagógicas por ronda ──
+  const alertas = [];
+  rondas.forEach(({ ronda, c }) => {
+    const deudaDisp = dIni(c) + (Number(c.desembolsoCredito) || 0);
+    if (plz(c) > 0 && pCap(c) === 0 && (dIni(c) > 0 || c.desembolsoCredito > 0)) {
+      alertas.push(`R${ronda}: No se realizó pago voluntario de capital en esta ronda.`);
+    }
+    if (pCap(c) > deudaDisp + 0.5) {
+      alertas.push(`⚠ R${ronda}: El pago de capital (${fmt.bs(pCap(c))}) supera la deuda disponible (${fmt.bs(deudaDisp)}).`);
+    }
+  });
+  const alertasHtml = alertas.length
+    ? `<div style="margin:4px 0 16px;padding:8px 12px;background:rgba(245,158,11,.08);border-radius:var(--r);font-size:.74rem;color:var(--text2)">`
+      + alertas.map(a => '• ' + a).join('<br>') + '</div>'
+    : '';
+
+  // ── Tarjetas de detalle por ronda con actividad ──
+  const cards = rondas.filter(x => (x.c.desembolsoCredito > 0) || (x.c.sobregiroUtilizado > 0)).map(({ ronda, c }) => {
+    const box = (label, val, color) =>
+      `<div style="padding:12px 16px;border-right:1px solid var(--border)"><div style="font-size:.68rem;color:var(--text3);text-transform:uppercase;letter-spacing:1px">${label}</div>` +
+      `<div style="font-family:var(--font-mono);font-size:1rem;font-weight:700;margin-top:4px${color?';color:'+color:''}">${val}</div></div>`;
+
+    // A. Crédito nuevo (si hubo desembolso o queda saldo ordinario)
+    let ordinario = '';
+    if (c.desembolsoCredito > 0 || c.saldoCreditoOrdinarioFinal > 0) {
+      ordinario = `
+        <div style="font-size:.7rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:10px 16px 4px">Crédito nuevo</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:0;border-bottom:1px solid var(--border)">
+          ${box('Tipo', c.tipoCredito || '—')}
+          ${box('Monto solicitado', fmt.bs(c.nuevoCreditoSolicitado))}
+          ${box('Desembolso real', fmt.bs(c.desembolsoCredito), 'var(--accent2)')}
+          ${box('Tasa aplicada', pct(c.tasaCredito) + (c.tasaCredito!=null? ' ' + (c.periodoTasa||'') : ''), 'var(--accent3)')}
+          ${box('Plazo solicitado', (plz(c)!=null? plz(c) + ' ' + (c.unidadPlazo||'') + ' (informativo)' : '—'))}
+          ${box('Comisión apertura', fmt.bs(c.comisionApertura), 'var(--accent4)')}
+          ${box('Interés cobrado', fmt.bs(c.pagoIntereses), 'var(--accent4)')}
+          ${box('Pago voluntario de capital', fmt.bs(pCap(c)))}
+          ${box('Saldo financiero ordinario (cierre)', fmt.bs(c.saldoCreditoOrdinarioFinal))}
+        </div>`;
+    }
+
+    // B. Sobregiro de la ronda
+    let sobregiro = '';
+    if (c.sobregiroUtilizado > 0) {
+      sobregiro = `
+        <div style="font-size:.7rem;color:var(--accent4);text-transform:uppercase;letter-spacing:1px;padding:10px 16px 4px">Sobregiro de la ronda</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:0;border-bottom:1px solid var(--border)">
+          ${box('Sobregiro utilizado', fmt.bs(c.sobregiroUtilizado), 'var(--accent4)')}
+          ${box('Tasa', pct(c.tasaSobregiro) + (c.tasaSobregiro!=null? ' ' + (c.periodoTasa||'') : ''), 'var(--accent3)')}
+          ${box('Interés generado', fmt.bs(c.interesSobregiro), 'var(--accent4)')}
+          ${box('Saldo sobregiro', fmt.bs(c.saldoSobregiroActual))}
+        </div>`;
+    }
+
+    return `
+      <div class="result-round-card" style="margin-bottom:16px">
+        <div class="result-round-header">
+          <h3>💳 Financiamiento — Ronda ${ronda}</h3>
+          <span class="badge" style="background:rgba(108,99,255,.1);color:var(--accent3)">${c.estadoCredito || ''}</span>
+        </div>
+        ${ordinario}
+        ${sobregiro}
+        <div style="padding:10px 16px;font-size:.78rem;color:var(--text3)">
+          Movimiento: deuda inicial ${fmt.bs(dIni(c))} + desembolso ${fmt.bs(c.desembolsoCredito)}
+          + sobregiro ${fmt.bs(c.sobregiroUtilizado)} + int. sobregiro ${fmt.bs(c.interesSobregiro)}
+          − pago voluntario de capital ${fmt.bs(pCap(c))} = <b>deuda financiera final ${fmt.bs(c.deudaFinancieraFinal)}</b>
+          ${c.movInconsistente ? '<div style="margin-top:6px;color:var(--accent4)">⚠ La identidad de deuda no cuadra dentro de la tolerancia de redondeo.</div>' : ''}
+        </div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="stat-grid" style="margin-bottom:16px">
+      <div class="stat-card"><div class="stat-label">Deuda financiera actual</div><div class="stat-value" style="color:${ult.deudaFinancieraFinal>0?'var(--accent4)':'var(--accent5)'}">${fmt.bs(ult.deudaFinancieraFinal)}</div></div>
+      <div class="stat-card"><div class="stat-label">Costo financiero acumulado</div><div class="stat-value" style="color:var(--accent4)">${fmt.bs(costoAcum)}</div></div>
+    </div>
+    <div style="margin-bottom:14px;padding:10px 14px;background:rgba(108,99,255,.08);border-radius:var(--r);font-size:.78rem;color:var(--text2)">
+      ⓘ El simulador no genera cuotas automáticas. El <b>plazo solicitado es informativo</b> y no determina el pago periódico. El equipo decide cuánto capital amortizar en cada ronda (pago voluntario).
+    </div>
+    <div style="font-size:.65rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:6px 0 4px;border-bottom:2px solid var(--border2);margin:4px 0 8px">🏦 Movimiento de deuda financiera por ronda</div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Ronda</th><th>Deuda inicial</th><th>Desembolso</th><th>Sobregiro</th><th>Int. sobregiro</th><th>Pago voluntario capital</th><th>Deuda final</th></tr></thead>
+      <tbody>${movRows}</tbody>
+    </table></div>
+    ${alertasHtml}
+    <div style="margin:8px 0 16px;font-size:.74rem;color:var(--text3);font-style:italic">ⓘ ${ult.notaAmortizacion || ''} ${ult.notaContinuidad || ''} La "deuda financiera" es sólo deuda bancaria/sobregiro (resultado.deudaFinal); NO incluye IVA ni otras obligaciones (esos van en Pasivos totales del Balance).</div>
+    ${cards}`;
+}
+
+// ── Créditos Admin ─────────────────────────────────────────
+// ── Inventarios (vista profesor — igual que estudiante pero para todos los equipos) ──
+async function loadAdminInventarios() {
+  const el = document.getElementById('adminInventariosContent');
+  if (!el) return;
+  el.innerHTML = '<div style="padding:20px;color:var(--text3)">Cargando inventarios…</div>';
+  try {
+    const [rondasData, simData] = await Promise.all([
+      api('GET', '/admin/rondas'),
+      api('GET', '/admin/config'),
+    ]);
+    const equipos = (simData?.users || []).filter(u => u.rol === 'equipo');
+    const rondas  = (rondasData?.rondas || rondasData || [])
+      .filter(r => r.resultados)
+      .sort((a,b) => a.numero - b.numero);
+
+    if (!rondas.length) {
+      el.innerHTML = '<div class="empty-state"><div class="empty-icon">📦</div><p>Sin rondas simuladas aún.</p></div>';
+      return;
+    }
+
+    // Selector de equipo
+    const eqOpts = equipos.map(e =>
+      `<option value="${e.id}">${e.nombre}</option>`
+    ).join('');
+
+    el.innerHTML = `
+      <div style="padding:16px 20px">
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+          <label style="font-size:.82rem;color:var(--text2)">Ver inventario de:</label>
+          <select id="invEqSelector" class="form-input" style="width:200px">${eqOpts}</select>
+        </div>
+        <div id="invEqContent"></div>
+      </div>`;
+
+    const renderInvEquipo = (eqId) => {
+      const eqNombre = equipos.find(e => e.id === eqId)?.nombre || eqId;
+      const productoMap = {};
+      rondas.forEach(ronda => {
+        const resObj = ronda.resultados?.resultados || ronda.resultados || {};
+        // buscar resultados de este equipo (puede ser eq__prod_1, etc.)
+        const keys = Object.keys(resObj).filter(k => k.startsWith(eqId));
+        if (!keys.length) return;
+        keys.forEach(key => {
+          const r   = resObj[key];
+          const pid = r.productoId || 'prod_1';
+          const pnom= r.producto   || 'Producto Principal';
+          if (!productoMap[pid]) productoMap[pid] = { nombre: pnom, rondas: [] };
+          productoMap[pid].rondas.push({
+            ronda:      ronda.numero,
+            invInicial: r.inventarioInicial ?? 0,
+            produccion: r.produccion        ?? 0,
+            ventas:     r.ventasReales      ?? 0,
+            invFinal:   r.inventarioFinal   ?? 0,
+            invValor:   r.invFinalValorizado ?? 0,
+            costoAlmac: r.costoAlmacenamiento ?? 0,
+          });
+        });
+      });
+
+      const secH = t => `<div style="font-family:var(--font-mono);font-size:.65rem;color:var(--accent3);text-transform:uppercase;letter-spacing:1px;padding:6px 0 4px;border-bottom:2px solid var(--border2);margin:16px 0 8px">${t}</div>`;
+      let html = `<div style="font-weight:700;font-size:.9rem;margin-bottom:12px;color:var(--accent3)">📦 ${eqNombre}</div>`;
+
+      if (!Object.keys(productoMap).length) {
+        html += '<p style="color:var(--text3);font-size:.8rem">Sin datos de inventario para este equipo.</p>';
+        document.getElementById('invEqContent').innerHTML = html;
+        return;
+      }
+
+      html += secH('Kardex — Inventario de Productos Terminados');
+      Object.entries(productoMap).forEach(([pid, prod]) => {
+        const ult = prod.rondas[prod.rondas.length - 1];
+        const cob = (ult?.ventas||0) > 0 ? (ult.invFinal / ult.ventas).toFixed(1) : '—';
+        const rot = (ult?.invFinal||0) > 0 ? ((ult.ventas || 0) / (((ult.invFinal||0) + (ult.invInicial||0)) / 2)).toFixed(2) : '—';
+        const alerta = parseFloat(cob) > 3 ? '🔴 Crítico' : parseFloat(cob) > 1 ? '⚠ Alto' : '✅ Óptimo';
+        html += `<div style="background:var(--bg2);border:0.5px solid var(--border);border-radius:var(--r);padding:12px 16px;margin-bottom:12px">
+          <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+            <span style="font-weight:700;font-size:.82rem">${prod.nombre}</span>
+            <span style="font-size:.74rem;padding:2px 8px;border-radius:4px;background:rgba(255,255,255,.06)">${alerta}</span>
+          </div>
+          <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.78rem">
+          <thead><tr style="background:rgba(255,255,255,.04)">${
+            ['Ronda','Inv.Ini','Prod.','Ventas','Inv.Final','Valor Bs','Almac. Bs'].map(h =>
+              `<th style="padding:5px 8px;text-align:right;font-size:.62rem;color:var(--text3);text-transform:uppercase">${h}</th>`
+            ).join('')
+          }</tr></thead><tbody>${
+            prod.rondas.map(rr => {
+              const col = rr.invFinal > rr.ventas * 2 ? 'var(--accent4)' : 'var(--text1)';
+              return `<tr style="border-bottom:1px solid var(--border)">
+                <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);color:var(--accent3)">R${rr.ronda}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)">${rr.invInicial.toLocaleString('es')}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);color:var(--accent2)">${rr.produccion.toLocaleString('es')}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)">${rr.ventas.toLocaleString('es')}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);font-weight:700;color:${col}">${rr.invFinal.toLocaleString('es')}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono)">${Math.round(rr.invValor).toLocaleString('es')}</td>
+                <td style="padding:4px 8px;text-align:right;font-family:var(--font-mono);color:var(--accent4)">${Math.round(rr.costoAlmac).toLocaleString('es')}</td>
+              </tr>`;
+            }).join('')
+          }</tbody></table></div>
+          <div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px;font-size:.75rem">
+            <span style="color:var(--text3)">Rotación: <b>${rot}</b></span>
+            <span style="color:var(--text3)">Cobertura: <b>${cob} rondas</b></span>
+            <span style="color:var(--text3)">Stock actual: <b>${(ult?.invFinal||0).toLocaleString('es')} u.</b></span>
+            <span style="color:var(--text3)">Valor: <b>Bs ${Math.round(ult?.invValor||0).toLocaleString('es')}</b></span>
+          </div></div>`;
+      });
+      document.getElementById('invEqContent').innerHTML = html;
+    };
+
+    // Render primero equipo
+    if (equipos.length) renderInvEquipo(equipos[0].id);
+    document.getElementById('invEqSelector')?.addEventListener('change', e => renderInvEquipo(e.target.value));
+
+  } catch(e) {
+    el.innerHTML = `<div class="empty-state"><p style="color:var(--accent4)">${e.message}</p></div>`;
+  }
+}
+
+
+// ── Dashboard Anónimo del Equipo ───────────────────────────
+async function loadEquipoDashboard() {
+  const el = document.getElementById('eq-dashboard-content');
+  if (!el) return;
+
+  const data = await api('GET', '/api/resultados');
+  const last = data.historial?.[data.historial.length - 1];
+
+  if (!last) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">📊</div><p>Aún no hay rondas simuladas.</p></div>`;
+    return;
+  }
+
+  // Get anonymous comparison from server
+  try {
+    const cmp = await api('GET', `/api/dashboard/${last.ronda}`);
+    if (cmp.bloqueado) {
+      // Misma información que el ranking de la pestaña Investigación
+      // (posición relativa, EBIT comparativo): mismo gate por ronda.
+      el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔒</div>`
+        + `<p>El ranking y el EBIT comparativo de la ronda ${last.ronda} requieren `
+        + `un reporte de investigación de mercado.</p>`
+        + `<p style="font-size:.78rem;color:var(--text3);margin-top:8px">`
+        + `Compra Básico, Premium o Estratégico en tu hoja de decisión.</p></div>`;
+      return;
+    }
+    renderEquipoDashboard(el, cmp, last.resultado, data.historial);
+  } catch {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">📊</div><p>Dashboard disponible tras la primera simulación.</p></div>`;
+  }
+}
+
+function renderEquipoDashboard(el, cmp, miResultado, historial) {
+  // Defensa: con el gate por ronda, `ranking` puede venir vacío y `stats` null.
+  // El llamador ya corta antes con el mensaje de bloqueo; esto evita un NaN o
+  // un TypeError si se llega acá por otra vía.
+  if (!cmp.ranking?.length) {
+    el.innerHTML = `<div class="empty-state"><div class="empty-icon">🔒</div>`
+      + `<p>Ranking no disponible para esta ronda.</p></div>`;
+    return;
+  }
+  const miPos = cmp.ranking.findIndex(r => r.esYo) + 1;
+  const totalEq = cmp.ranking.length;
+
+  el.innerHTML = `
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="stat-label">Tu posición (EBIT)</div>
+        <div class="stat-value" style="color:var(--accent3)">${miPos}°<span style="font-size:.9rem;color:var(--text3)">/${totalEq}</span></div>
+        <div class="stat-sub">en ronda ${cmp.ronda}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Tu EBIT</div>
+        <div class="stat-value" style="color:${miResultado.ebit>=0?'var(--accent5)':'var(--accent4)'}">${fmt.bs(miResultado.ebit)}</div>
+        <div class="stat-sub">EBIT mercado: ${fmt.bs(cmp.stats.ebitPromedio)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Tu Market Share</div>
+        <div class="stat-value" style="color:var(--accent2)">${fmt.pct(miResultado.shareReal)}</div>
+        <div class="stat-sub">en tu segmento</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Tu Caja Final</div>
+        <div class="stat-value" style="color:${miResultado.cajaFinal>=0?'var(--accent2)':'var(--accent4)'}">${fmt.bs(miResultado.cajaFinal)}</div>
+        <div class="stat-sub"><span class="badge ${miResultado.alertaCaja==='ALERTA'?'badge-alert':'badge-ok'}">${miResultado.alertaCaja}</span></div>
+      </div>
+    </div>
+
+    <div class="charts-row">
+      <div class="chart-card">
+        <h4>EBIT Comparativo — Anónimo (Ronda ${cmp.ronda})</h4>
+        <div class="chart-wrap"><canvas id="chartCmpEBIT"></canvas></div>
+      </div>
+      <div class="chart-card">
+        <h4>Tu Evolución EBIT (todas las rondas)</h4>
+        <div class="chart-wrap"><canvas id="chartMiEBIT"></canvas></div>
+      </div>
+    </div>
+
+    <div class="table-wrap" style="margin-top:20px">
+      <table>
+        <thead><tr><th>#</th><th>Empresa</th><th>EBIT</th><th>Ventas (unid)</th><th>Market Share</th><th>Caja</th></tr></thead>
+        <tbody>
+          ${cmp.ranking.map((r,i) => `
+            <tr style="${r.esYo?'background:rgba(108,99,255,.07);':''}">
+              <td class="num"><strong>${i+1}</strong></td>
+              <td><strong>${r.esYo ? '★ Tu empresa' : `Empresa ${String.fromCharCode(65+i)}`}</strong></td>
+              <td class="num ${r.ebit>=0?'pos':'neg'}">${fmt.bs(r.ebit)}</td>
+              <td class="num">${fmt.num(r.ventas)}</td>
+              <td class="num">
+                <div class="share-bar-wrap">
+                  <div class="share-bar-bg"><div class="share-bar-fill" style="width:${Math.min(100,r.share*100)}%;background:${r.esYo?'var(--accent)':'var(--border2)'}"></div></div>
+                  <span class="share-val">${fmt.pct(r.share)}</span>
+                </div>
+              </td>
+              <td class="num ${r.caja>=0?'pos':'neg'}">${fmt.bs(r.caja)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+
+  // Charts
+  const defOpts = { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{x:{ticks:{color:'#9BA3C4',font:{family:'Space Mono',size:9}},grid:{color:'#2A2F45'}},y:{ticks:{color:'#9BA3C4',font:{family:'Space Mono',size:9}},grid:{color:'#2A2F45'}}} };
+
+  new Chart(document.getElementById('chartCmpEBIT'), {
+    type:'bar',
+    data:{ labels: cmp.ranking.map((_,i) => i===miPos-1?'★ Yo':`E${String.fromCharCode(65+i)}`),
+      datasets:[{ data: cmp.ranking.map(r=>r.ebit),
+        backgroundColor: cmp.ranking.map(r => r.esYo ? '#6C63FF' : (r.ebit>=0?'rgba(6,255,165,.4)':'rgba(255,107,107,.4)')),
+        borderRadius:4 }]},
+    options: defOpts,
+  });
+
+  if (historial.length > 1) {
+    new Chart(document.getElementById('chartMiEBIT'), {
+      type:'line',
+      data:{ labels: historial.map(h=>`R${h.ronda}`),
+        datasets:[{ data: historial.map(h=>h.resultado.ebit),
+          borderColor:'#6C63FF', backgroundColor:'rgba(108,99,255,.1)', fill:true, tension:.3, pointRadius:4 }]},
+      options: defOpts,
+    });
+  }
+}
+function buildManual() {
+  window.open('/manual.html', '_blank');
+}
+function buildManualProfesor() {
+  window.open('/manual-profesor.html', '_blank');
+}
+
+
+// ── Función genérica de impresión / PDF ─────────────────────
+function printPanel(contentId, titulo, subtitulo) {
+  const content = document.getElementById(contentId);
+  if (!content) { toast('Sin contenido para imprimir', 'info'); return; }
+  const css = [
+    '*{box-sizing:border-box;margin:0;padding:0}',
+    'body{font-family:Segoe UI,sans-serif;font-size:11px;color:#111;background:#fff;padding:20px}',
+    'h1{font-size:15px;margin-bottom:4px;color:#2a2f45}',
+    '.sub{font-size:10px;color:#666;margin-bottom:16px;padding-bottom:8px;border-bottom:2px solid #2a2f45}',
+    'table{width:100%;border-collapse:collapse;margin-bottom:14px;font-size:10.5px}',
+    'th{background:#2a2f45;color:#fff;padding:6px 10px;text-align:left;font-size:9px;text-transform:uppercase}',
+    'td{padding:5px 10px;border:1px solid #ddd;vertical-align:top}',
+    'tr:nth-child(even) td{background:#f8f9ff}',
+    '.result-round-card{border:1px solid #ddd;border-radius:6px;margin-bottom:14px;overflow:hidden}',
+    '.result-round-header{background:#2a2f45;color:#fff;padding:8px 14px;font-size:10px;font-weight:700;text-transform:uppercase}',
+    '.fin-row{display:flex;justify-content:space-between;padding:4px 14px;border-bottom:1px solid #f0f0f0;font-size:10.5px}',
+    '.fin-row.sub{background:#f0f4ff;font-weight:700}',
+    '.pos,.up{color:#27ae60}.neg,.down{color:#e74c3c}',
+    '.num{text-align:right}',
+    'button,canvas,.no-print{display:none!important}',
+    '@media print{body{padding:8px}@page{margin:1cm;size:A4}}'
+  ].join('');
+  const win = window.open('', '_blank', 'width=1100,height=900');
+  const parts = [
+    '<!DOCTYPE html><html lang="es"><head>',
+    '<meta charset="UTF-8"/>',
+    '<title>' + titulo + '</title>',
+    '<style>' + css + '</style>',
+    '</head><body>',
+    '<h1>' + titulo + '</h1>',
+    '<div class="sub">' + (subtitulo||'') + ' | SimNego COM540 UAGRM</div>',
+    content.innerHTML,
+    '</body></html>'
+  ];
+  win.document.open();
+  win.document.write(parts.join(''));
+  win.document.close();
+  setTimeout(function(){ try{ win.print(); }catch(e){} }, 600);
+}
+
+// ── Imprimir Hoja de Decisión ──────────────────────────────
+function printHoja() {
+  const content = document.getElementById('hojaContent');
+  if (!content) return;
+  const win = window.open('', '_blank', 'width=1100,height=800');
+  const css = '*{box-sizing:border-box;margin:0;padding:0}'
+    + 'body{font-family:Segoe UI,sans-serif;font-size:11px;color:#111;background:#fff;padding:16px}'
+    + 'h1{font-size:15px;margin-bottom:4px}.sub{font-size:10px;color:#666;margin-bottom:14px}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:12px;font-size:10.5px}'
+    + 'th{background:#2a2f45;color:#fff;padding:5px 8px;text-align:left;font-size:9px;text-transform:uppercase}'
+    + 'td{padding:5px 8px;border:1px solid #ddd;vertical-align:top}'
+    + 'tr:nth-child(even) td{background:#f9f9ff}'
+    + '.sec-title{background:#4a4080;color:#fff;padding:5px 10px;font-size:9px;font-weight:700;text-transform:uppercase;margin:10px 0 0}'
+    + '.readonly{color:#666;font-style:italic}'
+    + 'textarea,select,input{border:none;background:transparent;font-family:inherit;font-size:inherit;width:100%;padding:0}'
+    + '@media print{body{padding:0}button{display:none!important}}';
+  const nombre = (state.me && state.me.nombre) || '';
+  const ronda  = hojaRondaActual || 1;
+  const parts  = [
+    '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"/>',
+    '<title>Hoja de Decisión — ' + nombre + ' — Ronda ' + ronda + '</title>',
+    '<style>' + css + '</style></head><body>',
+    '<h1>Hoja de Decisión — ' + nombre + '</h1>',
+    '<div class="sub">Trimestre ' + ronda + ' / 20 | Simulador de Negocios | Juego de Negocios</div>',
+    content.innerHTML,
+    '</body></html>'
+  ];
+  win.document.open();
+  win.document.write(parts.join(''));
+  win.document.close();
+  setTimeout(function(){ try{ win.print(); }catch(e){} }, 500);
+}
+
+
+// ============================
+// ADMIN - Gestión de Profesores
+// ============================
+
+async function loadAdminProfesores() {
+  const container = document.getElementById('profesoresContent');
+  if (!container) return;
+  container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text3)">Cargando...</div>';
+  try {
+    const profesores = await api('GET', '/admin/usuarios');
+    renderProfesores(container, profesores);
+  } catch (e) {
+    container.innerHTML = `<div class="empty-state"><div class="empty-icon">⚠️</div><p>${e.message}</p></div>`;
+  }
+}
+
+function renderProfesores(container, profesores) {
+  // El botón "Crear profesor" usa onclick="crearProfesor()" (función global window.crearProfesor).
+  // No se usa addEventListener para evitar problemas de timing al reconstruir el DOM.
+
+  if (!profesores.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-icon">👨‍🏫</div>
+        <p>No hay profesores registrados. Crea el primero abajo.</p>
+      </div>
+      ${formAgregarProfesor()}
+    `;
+    return;
+  }
+
+  // BUG #4 CORREGIDO: muestra password_plain con toggle + botón copiar credenciales
+  const rows = profesores.map(prof => {
+    const pwId = `pw_${prof.id}`;
+    const pw   = prof.password_plain || '(ver con superadmin)';
+    return `
+      <tr>
+        <td>
+          <strong>${escapeHtml(prof.nombre)}</strong><br>
+          <span style="font-size:.7rem;color:var(--text3)">${prof.id}</span>
+        </td>
+        <td>${escapeHtml(prof.email || '—')}</td>
+        <td>
+          <div style="display:flex;align-items:center;gap:6px">
+            <input id="${pwId}" type="password" value="${escapeHtml(pw)}" readonly
+              style="border:none;background:var(--bg2);padding:3px 8px;border-radius:6px;
+                     font-family:monospace;font-size:.8rem;width:110px;color:var(--text1)">
+            <button class="btn btn-ghost btn-sm"
+              onclick="toggleInputPw('${pwId}',this)" title="Mostrar/ocultar">👁</button>
+            <button class="btn btn-ghost btn-sm" title="Copiar credenciales"
+              onclick="navigator.clipboard.writeText('Email: ${escapeHtml(prof.email)} | Contraseña: ${escapeHtml(pw)}').then(()=>toast('Credenciales copiadas','success'))">📋</button>
+          </div>
+        </td>
+        <td style="font-size:.78rem">${fmt.dt(prof.creado_at)}</td>
+        <td style="text-align:center">
+          <button class="btn btn-danger btn-sm"
+            onclick="eliminarProfesor('${prof.id}','${escapeHtml(prof.nombre)}')">✕ Eliminar</button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  container.innerHTML = `
+    <div class="table-wrap" style="margin-bottom:24px">
+      <table style="width:100%">
+        <thead>
+          <tr>
+            <th>Nombre / ID</th>
+            <th>Email (usar para login)</th>
+            <th>Contraseña</th>
+            <th>Registrado</th>
+            <th style="width:100px">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+    ${formAgregarProfesor()}
+  `;
+}
+
+// ── FIX: función global para crear profesor (evita depender de addEventListener) ──
+window.crearProfesor = async () => {
+  const nombre   = (document.getElementById('profNombre')?.value || '').trim();
+  const email    = (document.getElementById('profEmail')?.value || '').trim();
+  const password = document.getElementById('profPassword')?.value || '';
+  const btn      = document.getElementById('btnCrearProfesor');
+
+  if (!nombre || !email || !password) {
+    toast('Complete todos los campos', 'error');
+    return;
+  }
+  if (btn) { btn.disabled = true; btn.textContent = 'Creando...'; }
+  try {
+    const resultado = await api('POST', '/admin/usuarios', { nombre, email, password });
+    const pw = resultado.password_plain || password;
+    toast(`✓ Profesor "${nombre}" creado  |  Email: ${email}  |  Contraseña: ${pw}`, 'success');
+    // Copiar automáticamente al portapapeles
+    navigator.clipboard?.writeText(`Email: ${email} | Contraseña: ${pw}`).catch(() => {});
+    loadAdminProfesores();
+  } catch (err) {
+    toast(`Error al crear profesor: ${err.message}`, 'error');
+    if (btn) { btn.disabled = false; btn.textContent = '✓ Crear profesor'; }
+  }
+};
+
+function formAgregarProfesor() {
+  return `
+    <div class="param-card" style="margin-top:16px">
+      <div class="param-card-title">➕ Agregar nuevo profesor</div>
+      <div style="display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end">
+        <div style="flex:2; min-width:150px">
+          <label class="form-label">Nombre completo</label>
+          <input type="text" id="profNombre" class="form-input" placeholder="Ej: Prof. Juan Pérez">
+        </div>
+        <div style="flex:2; min-width:150px">
+          <label class="form-label">Correo electrónico</label>
+          <input type="email" id="profEmail" class="form-input" placeholder="juan@ejemplo.com">
+        </div>
+        <div style="flex:1; min-width:120px">
+          <label class="form-label">Contraseña</label>
+          <div class="pw-input-wrap">
+            <input type="password" id="profPassword" class="form-input" placeholder="******">
+            <button type="button" class="btn-eye-input" onclick="toggleInputPw('profPassword',this)">👁</button>
+          </div>
+        </div>
+        <div>
+          <button type="button" id="btnCrearProfesor" class="btn btn-primary"
+            onclick="crearProfesor()">✓ Crear profesor</button>
+        </div>
+      </div>
+      <p style="font-size:.72rem;color:var(--text3);margin-top:8px">
+        ℹ️ El profesor ingresará con su correo electrónico y la contraseña que definas aquí.
+      </p>
+    </div>
+  `;
+}
+
+window.eliminarProfesor = async (id, nombre) => {
+  if (!confirm(`¿Eliminar profesor "${nombre}"? Se eliminarán también sus simulaciones. Esta acción no se puede deshacer.`)) return;
+  try {
+    await api('DELETE', `/admin/usuarios/${id}`);
+    toast(`Profesor "${nombre}" eliminado`, 'success');
+    loadAdminProfesores();
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+};
+
+// ── Cambiar contraseña propia (superadmin/profesor) ─────────
+function toggleCardCambiarContrasena() {
+  let card = document.getElementById('cardCambiarContrasena');
+  if (card) { card.remove(); return; }
+  card = document.createElement('div');
+  card.id = 'cardCambiarContrasena';
+  card.className = 'param-card';
+  card.style.margin = '12px 16px';
+  card.innerHTML = `
+    <div class="param-card-title">🔑 Cambiar mi contraseña</div>
+    <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px">
+      <div>
+        <label class="form-label">Contraseña actual</label>
+        <div class="pw-input-wrap">
+          <input type="password" id="ccActual" class="form-input" placeholder="******">
+          <button type="button" class="btn-eye-input" onclick="toggleInputPw('ccActual',this)">👁</button>
+        </div>
+      </div>
+      <div>
+        <label class="form-label">Nueva contraseña</label>
+        <div class="pw-input-wrap">
+          <input type="password" id="ccNueva" class="form-input" placeholder="Mínimo 4 caracteres">
+          <button type="button" class="btn-eye-input" onclick="toggleInputPw('ccNueva',this)">👁</button>
+        </div>
+      </div>
+      <div>
+        <label class="form-label">Confirmar nueva contraseña</label>
+        <div class="pw-input-wrap">
+          <input type="password" id="ccConfirmar" class="form-input" placeholder="Repetir nueva contraseña">
+          <button type="button" class="btn-eye-input" onclick="toggleInputPw('ccConfirmar',this)">👁</button>
+        </div>
+      </div>
+      <div id="ccError" style="color:var(--accent4,#e55);font-size:.82rem"></div>
+      <div style="display:flex; gap:8px">
+        <button class="btn btn-primary btn-sm" id="btnGuardarCambiarContrasena">Guardar</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('cardCambiarContrasena').remove()">Cancelar</button>
+      </div>
+    </div>
+  `;
+  document.querySelector('#screen-admin .sidebar').appendChild(card);
+  document.getElementById('btnGuardarCambiarContrasena').addEventListener('click', guardarCambiarContrasena);
+}
+
+async function guardarCambiarContrasena() {
+  const actual    = document.getElementById('ccActual')?.value || '';
+  const nueva     = document.getElementById('ccNueva')?.value || '';
+  const confirmar = document.getElementById('ccConfirmar')?.value || '';
+  const errEl = document.getElementById('ccError');
+  const btn   = document.getElementById('btnGuardarCambiarContrasena');
+  errEl.textContent = '';
+
+  if (!actual || !nueva || !confirmar) { errEl.textContent = 'Completa los 3 campos.'; return; }
+  if (nueva.length < 4) { errEl.textContent = 'La nueva contraseña debe tener al menos 4 caracteres.'; return; }
+  if (nueva !== confirmar) { errEl.textContent = 'La nueva contraseña y su confirmación no coinciden.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  try {
+    await api('POST', '/auth/cambiar-contrasena', { contrasenhaActual: actual, nuevaContrasena: nueva });
+    toast('Contraseña actualizada', 'success');
+    document.getElementById('cardCambiarContrasena')?.remove();
+  } catch (e) {
+    errEl.textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Guardar';
+  }
+}
+
+// ── Configurar recuperación por pregunta de seguridad (solo superadmin) ──
+function toggleCardConfigurarRecuperacion() {
+  let card = document.getElementById('cardConfigurarRecuperacion');
+  if (card) { card.remove(); return; }
+  card = document.createElement('div');
+  card.id = 'cardConfigurarRecuperacion';
+  card.className = 'param-card';
+  card.style.margin = '12px 16px';
+  card.innerHTML = `
+    <div class="param-card-title">🛟 Configurar mi recuperación de contraseña</div>
+    <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px">
+      <div>
+        <label class="form-label">Pregunta de seguridad</label>
+        <input type="text" id="crPregunta" class="form-input" placeholder="Ej: ¿Nombre de tu primera mascota?">
+      </div>
+      <div>
+        <label class="form-label">Respuesta</label>
+        <input type="text" id="crRespuesta" class="form-input" placeholder="Tu respuesta" autocomplete="off">
+      </div>
+      <div id="crError" style="color:var(--accent4,#e55);font-size:.82rem"></div>
+      <div style="display:flex; gap:8px">
+        <button class="btn btn-primary btn-sm" id="btnGuardarConfigurarRecuperacion">Guardar</button>
+        <button class="btn btn-ghost btn-sm" onclick="document.getElementById('cardConfigurarRecuperacion').remove()">Cancelar</button>
+      </div>
+    </div>
+  `;
+  document.querySelector('#screen-admin .sidebar').appendChild(card);
+  document.getElementById('btnGuardarConfigurarRecuperacion').addEventListener('click', guardarConfigurarRecuperacion);
+}
+
+async function guardarConfigurarRecuperacion() {
+  const pregunta  = document.getElementById('crPregunta')?.value || '';
+  const respuesta = document.getElementById('crRespuesta')?.value || '';
+  const errEl = document.getElementById('crError');
+  const btn   = document.getElementById('btnGuardarConfigurarRecuperacion');
+  errEl.textContent = '';
+
+  if (!pregunta.trim() || !respuesta.trim()) { errEl.textContent = 'Completa la pregunta y la respuesta.'; return; }
+
+  btn.disabled = true; btn.textContent = 'Guardando...';
+  try {
+    await api('POST', '/auth/configurar-recuperacion', { pregunta, respuesta });
+    toast('Recuperación configurada', 'success');
+    document.getElementById('cardConfigurarRecuperacion')?.remove();
+  } catch (e) {
+    errEl.textContent = e.message;
+    btn.disabled = false; btn.textContent = 'Guardar';
+  }
+}
+
+// ── Logout ─────────────────────────────────────────────────
+async function doLogout() {
+  wsClient.desconectar();
+  await api('POST','/auth/logout');
+  state = { me:null, ref:null, decisiones:null, resultados:null };
+  showScreen('screen-login');
+  document.getElementById('loginId').value = '';
+  document.getElementById('loginPass').value = '';
+}
+
+// ═══════════════════════════════════════════════════════════
+//  INIT — check existing session
+// ═══════════════════════════════════════════════════════════
+async function init() {
+  initLogin();
+  try {
+    const me = await api('GET', '/auth/me');
+    state.me = me;
+    if (me.rol === 'admin' || me.rol === 'superadmin' || me.rol === 'profesor') {
+      await initAdmin();
+    } else {
+      await initEquipo();
+    }
+  } catch {
+    showScreen('screen-login');
+    // GET /recuperar abre directamente la card de recuperación (vista
+    // pública de la SPA — el fallback estático de server.js ya sirve
+    // index.html para esta URL, no hace falta ruta nueva en el servidor).
+    // Solo tiene sentido sin sesión activa (si ya hay sesión, cayó en el
+    // try de arriba y nunca llega a este catch).
+    if (location.pathname === '/recuperar') mostrarCardRecuperar();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);
+ 

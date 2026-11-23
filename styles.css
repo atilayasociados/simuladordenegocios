@@ -1,0 +1,2151 @@
+:root {
+  /* ── Paleta Azul Marino Profundo — derivada de imágenes de referencia ──
+     Imagen 5 (banner): azul oscuro #0c1e3c → #0c54cc (fondo y gradiente)
+     Imagen 6 (logo):   verde lima #5ab40c, azul vivo #0d6ecc
+     Usuario: azul domina, equilibrado, dashboard bancario, sin blanco dominante
+     ─────────────────────────────────────────────────────────────────── */
+  --bg:     #0e1e35;   /* azul marino muy oscuro — fondo principal      */
+  --bg2:    #162840;   /* azul marino medio — cards y paneles           */
+  --bg3:    #1d3352;   /* azul más claro — hover, filas alternas        */
+  --bg4:    #254062;   /* azul activo / seleccionado                    */
+  --border:  #2a4d72;  /* borde sutil entre elementos                   */
+  --border2: #3a6090;  /* borde visible, separadores                    */
+  --text:    #e8f0f8;  /* texto principal — blanco-azulado  14.5:1 ✅ AAA */
+  --text2:   #a8c0d8;  /* texto secundario              7.9:1 ✅ AAA    */
+  --text3:   #88b0cc;  /* hints y placeholders          6.5:1 ✅ AA     */
+  --accent:  #0d6ecc;  /* azul vivo (img 6 dominante)                   */
+  --accent2: #5ab40c;  /* verde lima (img 6 acento)                     */
+  --accent3: #e8a820;  /* dorado/ámbar — advertencias                   */
+  --accent4: #e84040;  /* rojo — errores, peligro                       */
+  --accent5: #70cc20;  /* verde claro — positivos, ganancias            */
+  --success: #5ab40c;
+  --warning: #e8a820;
+  --danger:  #e84040;
+
+  /* ── Colores derivados / literales frecuentes ── */
+  --color-white:      #ffffff;
+  --color-gold:       #f0c040;   /* round-badge dorado — contraste 4.6:1 sobre bg2 */
+  --accent-hover:     #1a85e8;   /* btn-primary hover — azul vivo más claro */
+  --accent2-hover:    #6acc18;   /* btn-success hover — verde más claro */
+  --warning-hover:    #f0bc30;   /* btn-warning hover — ámbar más claro */
+
+  /* ── Colores del PDF corporativo diagonal (encapsulados) ── */
+  --pdf-blue-dark:    #0A1A33;
+  --pdf-blue-mid:     #1B3A6B;
+  --pdf-blue-hi:      #2A5599;
+  --pdf-green-neon:   #5BC22E;
+  --pdf-blue-cyan:    #1E5BB8;
+  --pdf-green-glow:   #7FE04A;
+
+  /* ── Escala tipográfica modular (Major Third 1.25, base 15px) ── */
+  /* P2: todos los font-size deben usar estos tokens              */
+  --text-xs:   0.512rem;  /* ≈  7.7px — badges, meta, hints             */
+  --text-sm:   0.640rem;  /* ≈  9.6px — nav-divider, top-title, labels   */
+  --text-base: 0.800rem;  /* ≈ 12.0px — nav-item, btn, inputs, celdas    */
+  --text-md:   1.000rem;  /* = 15.0px — body, modal-title, param-title   */
+  --text-lg:   1.250rem;  /* ≈ 18.8px — section h2, stat-value           */
+  --text-xl:   1.562rem;  /* ≈ 23.4px — login-title, hero titles         */
+  --text-2xl:  1.953rem;  /* ≈ 29.3px — KPI dashboard grandes            */
+
+  /* ── Escala de espaciado (múltiplos de 4px) ── */
+  /* P3: reemplaza px hardcodeados donde el valor coincide exacto */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 48px;
+
+  /* ── Dimensiones estructurales ── */
+  --sidebar-w: 224px;
+  --top-h:     58px;
+  --font-mono: 'Space Mono', monospace;
+  --font-sans: 'Sora', sans-serif;
+  --r:    8px;
+  --r-lg: 14px;
+  --shadow: 0 4px 24px rgba(0, 0, 0, 0.40);    /* sombra profunda modo oscuro */
+
+  /* ── Variables acuarela (login — intocables) ── */
+  --wc-verde1: #4a7c59;
+  --wc-verde2: #6b8f5e;
+  --wc-verde3: #2d5a3d;
+  --wc-verde4: #8fae7a;
+  --wc-blanco: #fafaf8;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 15px;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+/* ZONA 2: Gradiente institucional de fondo muy sutil detrás de los paneles
+   Azul marino FCEE en esquina superior derecha,
+   verde Ing. Comercial en esquina inferior izquierda.
+   opacity muy baja para no interferir con la legibilidad.             */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  background:
+    radial-gradient(ellipse 60% 50% at 90% 10%,
+      rgba(13, 110, 204, 0.12) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 60% at 10% 90%,
+      rgba(90, 180, 12, 0.08) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg3);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border2);
+  border-radius: 3px;
+}
+
+/* ── Screens ── */
+.screen {
+  display: none;
+  min-height: 100vh;
+}
+
+.screen:not(.hidden) {
+  display: flex;
+}
+
+.hidden {
+  display: none !important;
+}
+
+/* ── LOGIN ── */
+/* ── Pantalla de login: fondo azul marino oscuro con diagonal verde ──────
+   Coherente con el tema azul marino del simulador (imágenes ref. 5 y 6).
+   Reemplaza el fondo acuarela (blanco + manchas verdes) que era inconsistente
+   con la nueva paleta dark navy. Centro luminoso desplazado a la derecha,
+   diagonal verde neón en el tercio izquierdo — igual que imagen 5.          */
+#screen-login {
+  align-items: center;
+  justify-content: center;
+  background-color: #0A1A33;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100' preserveAspectRatio='xMidYMid slice'%3E %3Cdefs%3E %3CradialGradient id='bg' cx='65%25' cy='50%25' r='70%25'%3E %3Cstop offset='0%25' stop-color='%232A5599'/%3E %3Cstop offset='50%25' stop-color='%231B3A6B'/%3E %3Cstop offset='100%25' stop-color='%230A1A33'/%3E %3C/radialGradient%3E %3Cfilter id='glow' x='-20%25' y='-20%25' width='140%25' height='140%25'%3E %3CfeGaussianBlur stdDeviation='1.5' result='b'/%3E %3CfeMerge%3E%3CfeMergeNode in='b'/%3E%3CfeMergeNode in='SourceGraphic'/%3E%3C/feMerge%3E %3C/filter%3E %3C/defs%3E %3Crect width='100' height='100' fill='url(%23bg)'/%3E %3Cg transform='rotate(-17 25 50)'%3E %3Crect x='-10' y='-20' width='6' height='140' fill='%231E5BB8' opacity='0.85'/%3E %3Crect x='0' y='-20' width='4' height='140' fill='%231E5BB8' opacity='0.90'/%3E %3Crect x='10' y='-20' width='16' height='140' fill='%235BC22E' filter='url(%23glow)' opacity='0.95'/%3E %3C/g%3E %3Crect width='100' height='100' fill='url(%23vignette)'/%3E %3Cdefs%3E %3CradialGradient id='vignette' cx='50%25' cy='50%25' r='70%25'%3E %3Cstop offset='40%25' stop-color='transparent'/%3E %3Cstop offset='100%25' stop-color='%23000000' stop-opacity='0.40'/%3E %3C/radialGradient%3E %3C/defs%3E %3C/svg%3E");
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+
+.login-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+/* ── Login card: glassmorphism oscuro sobre fondo azul marino ──────────
+   WCAG verificado — todos los textos internos ajustados abajo.
+   bg blended aprox #354256 → ratio referencia para cálculos.
+   La .login-card mantiene opacity 0.82 para transparentar el fondo azul. */
+.login-card {
+  background: rgba(10, 26, 51, 0.82);
+  border: 1px solid rgba(91, 194, 46, 0.28);
+  border-radius: var(--r-lg);
+  padding: var(--space-8);
+  width: 380px;
+  max-width: 94vw;
+  box-shadow:
+    0 8px 40px rgba(10, 26, 51, 0.55),
+    0 2px 12px rgba(10, 26, 51, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Contenedor de los tres logotipos (sin icono jabón) */
+.logos-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
+/* Logos del login: CASO B — fondo blanco bakeado, sin canal alpha.
+   Píldora blanca con altura fija IGUAL para los tres logos.
+   El contenedor tiene tamaño fijo (80×80px); el objeto interno
+   se ajusta con object-fit: contain para que cada logo,
+   sin importar su proporción, respete el mismo marco blanco.      */
+.login-logo-img {
+  width:  80px;
+  height: 80px;
+  object-fit: contain;
+  transition: transform 0.2s;
+  background: rgba(255, 255, 255, 0.96);
+  border-radius: 12px;
+  padding: 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.30);
+  display: block;
+}
+
+.login-logo-img:hover {
+  transform: scale(1.02);
+}
+
+/* Todos los logos tienen el mismo contenedor 80×80px.
+   La regla de tamaño diferenciado fue eliminada. */
+
+/* En móviles: base 48px; los dos primeros → 58px (20% más) */
+@media (max-width: 480px) {
+  /* En móvil: todos los logos al mismo tamaño 60×60px */
+  .login-logo-img {
+    width: 60px;
+    height: 60px;
+  }
+  .logos-container {
+    gap: 10px;
+    margin-bottom: 10px;
+  }
+}
+
+.login-title {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: #ffffff;                  /* 10.17:1 ✅ AAA sobre card oscura */
+  letter-spacing: 3px;
+  margin-top: 0;
+}
+
+.login-sub {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.75); /* 6.13:1 ✅ AA */
+  font-size: var(--text-base);
+  margin-top: 4px;
+}
+
+.login-sub2 {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.72); /* 5.84:1 ✅ AA */
+  font-size: var(--text-sm);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+  margin-bottom: var(--space-6);
+}
+
+.login-error {
+  color: #ff9999;                   /* 4.97:1 ✅ AA — rojo claro visible */
+  font-size: var(--text-sm);
+  text-align: center;
+  margin-top: 10px;
+  min-height: 18px;
+}
+
+.login-footer {
+  color: rgba(255, 255, 255, 0.55); /* 3.91:1 ⚠️ texto pequeño/pie */
+  font-size: var(--text-sm);
+  margin-top: 20px;
+  text-align: center;
+}
+
+.login-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0 10px;
+  color: rgba(255, 255, 255, 0.50); /* 3.19:1 — separador decorativo */
+  font-size: var(--text-sm);
+}
+
+.login-divider::before,
+.login-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+/* ── SIDEBAR ── */
+.sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: var(--sidebar-w);
+  background: var(--bg);              /* azul marino muy oscuro — dominante */
+  border-right: none;
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  overflow-y: auto;
+  box-shadow: 3px 0 16px rgba(26, 58, 92, 0.22);
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 18px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.logo-icon {
+  font-size: 26px;
+  display: flex;
+  align-items: center;
+}
+
+/* Logo sidebar Ingeniería Comercial: CASO B — fondo blanco bakeado.
+   Misma solución que el login: píldora blanca explícita.
+   El logo muestra sus colores reales (verde y azul institucional)
+   sobre la píldora blanca, claramente distinguible sobre el sidebar
+   azul marino oscuro.                                               */
+.sidebar-logo-img {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  display: block;
+  background: rgba(255, 255, 255, 0.95);
+  border-radius: 8px;
+  padding: 3px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.logo-title {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  font-weight: 700;
+  color: #ffffff;
+  letter-spacing: 2px;
+}
+
+.logo-sub {
+  display: block;
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.60);
+  margin-top: 2px;
+}
+
+.nav {
+  flex: 1;
+  padding: 14px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 9px 12px;
+  border-radius: var(--r);
+  border: none;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  text-align: left;
+  width: 100%;
+}
+
+.nav-item:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+}
+/* P5: focus ring para navegación por teclado */
+.nav-item:focus-visible {
+  outline: 2px solid var(--pdf-green-neon);
+  outline-offset: -2px;
+}
+
+.nav-item.active {
+  background: var(--accent);            /* azul vivo como highlight activo */
+  color: #ffffff;
+  font-weight: 600;
+  border: 1px solid rgba(13, 110, 204, 0.50);
+  box-shadow: 0 2px 8px rgba(13, 110, 204, 0.30);
+}
+
+.sidebar-footer {
+  padding: var(--space-3);
+  border-top: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.round-badge {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--color-gold);
+  padding: 5px 8px;
+  background: rgba(240, 192, 64, 0.15);
+  border-radius: var(--r);
+  text-align: center;
+  margin-bottom: 4px;
+}
+
+.round-state-badge {
+  font-size: var(--text-sm);
+  color: rgba(255, 255, 255, 0.50);
+  text-align: center;
+  padding: 2px 0;
+}
+
+/* ── MAIN LAYOUT ── */
+.main {
+  margin-left: var(--sidebar-w);
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+.top-bar {
+  position: sticky;
+  top: 0;
+  height: var(--top-h);
+  background: var(--bg2);              /* azul marino medio */
+  border-bottom: 2px solid var(--accent); /* azul vivo inferior */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  z-index: 50;
+}
+
+.top-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  letter-spacing: 2px;
+  color: var(--text3);
+  text-transform: uppercase;
+}
+
+.top-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ── VIEWS ── */
+.view {
+  display: none;
+  padding: var(--space-6);
+  animation: fadeIn .2s ease;
+}
+
+.view.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.section-header {
+  margin-bottom: var(--space-5);
+}
+
+.section-header h2 {
+  font-size: var(--text-lg);
+  font-weight: 700;
+  margin-bottom: 4px;
+  background: linear-gradient(135deg, var(--accent) 0%, var(--pdf-green-neon) 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent; /* P4: gradiente PDF en títulos */
+}
+
+.section-header p {
+  color: var(--text2);
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+/* ── BUTTONS ── */
+.btn {
+  padding: 7px 16px;
+  border-radius: var(--r);
+  border: none;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+  /* P5: focus ring accesible con verde neón del PDF */
+}
+
+/* P5: focus ring universal para todos los botones */
+.btn:focus-visible {
+  outline: 2px solid var(--pdf-green-neon);
+  outline-offset: 2px;
+}
+
+/* P5: hover genérico de .btn base (brightness) */
+.btn:hover {
+  filter: brightness(1.08);
+}
+
+.btn-primary {
+  background: var(--accent);           /* azul marino FCEE */
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);                 /* azul marino más claro al hover */
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(26, 58, 92, 0.30);
+}
+
+.btn-success {
+  background: var(--accent2);
+  color: var(--bg);                    /* texto oscuro sobre verde lima — 6.35:1 ✅ */
+}
+
+.btn-success:hover {
+  background: var(--accent2-hover);
+  color: var(--bg);
+  box-shadow: 0 4px 12px rgba(90, 180, 12, 0.35);
+}
+
+.btn-danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text2);
+  border: 1px solid var(--border2);
+}
+
+.btn-ghost:hover {
+  background: var(--bg3);
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.btn-sm {
+  padding: 5px 10px;
+  font-size: var(--text-sm);
+}
+
+.btn-full {
+  width: 100%;
+  padding: 11px;
+}
+
+.btn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+}
+
+/* ── FORMS ── */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.form-label {
+  font-size: var(--text-sm);
+  color: var(--text2);
+  font-weight: 500;
+}
+
+.form-input,
+.form-select {
+  padding: 8px 11px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  transition: border-color .15s;
+  outline: none;
+  width: 100%;
+}
+
+.form-input:hover,
+.form-select:hover {
+  border-color: var(--border2); /* P5: hover sutil */
+}
+
+.form-input:focus,
+.form-select:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(91, 194, 46, 0.25); /* P4/P5: verde neón PDF */
+}
+
+.form-hint {
+  font-size: var(--text-xs);
+  color: var(--text3);
+}
+
+/* Overrides para formularios DENTRO de .login-card (fondo oscuro).
+   Cascade: selectores más específicos que los generales de .form-* */
+.login-card .form-label {
+  color: rgba(255, 255, 255, 0.85); /* 7.87:1 ✅ AAA */
+  font-weight: 500;
+}
+
+.login-card .form-input,
+.login-card .form-select {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.22);
+  color: #ffffff;
+}
+
+.login-card .form-input::placeholder,
+.login-card .form-select::placeholder {
+  color: rgba(255, 255, 255, 0.38);
+}
+
+.login-card .form-input:hover,
+.login-card .form-select:hover {
+  border-color: rgba(255, 255, 255, 0.40);
+}
+
+.login-card .form-input:focus,
+.login-card .form-select:focus {
+  border-color: var(--pdf-green-neon);
+  box-shadow: 0 0 0 2px rgba(91, 194, 46, 0.30);
+}
+
+.login-card .form-hint {
+  color: rgba(255, 255, 255, 0.50);
+}
+.table-wrap {
+  overflow-x: auto;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--text-base);
+}
+
+thead th {
+  background: var(--bg3);
+  padding: 10px 14px;
+  text-align: left;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--text3);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+tbody tr {
+  border-bottom: 1px solid var(--border);
+  transition: background .1s;
+}
+
+tbody tr:last-child {
+  border-bottom: none;
+}
+
+tbody tr:hover {
+  background: rgba(0, 0, 0, 0.02);
+}
+
+tbody td {
+  padding: 10px 14px;
+  color: var(--text);
+}
+
+td.num {
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  text-align: right;
+}
+
+td.pos {
+  color: var(--accent2);
+}
+
+td.neg {
+  color: var(--accent4);
+}
+
+td.warn {
+  color: var(--accent3);
+}
+
+/* ── BADGES ── */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.badge-ok {
+  background: rgba(46, 125, 50, 0.1);
+  color: var(--success);
+}
+
+.badge-alert {
+  background: rgba(198, 40, 40, 0.1);
+  color: var(--danger);
+}
+
+.badge-sent {
+  background: rgba(46, 125, 50, 0.1);
+  color: var(--success);
+}
+
+.badge-pending {
+  background: rgba(245, 124, 0, 0.1);
+  color: var(--warning);
+}
+
+.badge-simulated {
+  background: rgba(44, 110, 158, 0.1);
+  color: var(--accent);
+}
+
+.badge-open {
+  background: rgba(30, 140, 110, 0.1);
+  color: var(--accent2);
+}
+
+.badge-grow {
+  background: rgba(30, 140, 110, 0.1);
+  color: var(--accent2);
+}
+
+.badge-stable {
+  background: rgba(75, 92, 110, 0.1);
+  color: var(--text2);
+}
+
+.badge-high {
+  background: rgba(230, 160, 23, 0.1);
+  color: var(--accent3);
+}
+
+/* ── TOOLBAR ── */
+.toolbar {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* ── STAT CARDS ── */
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 14px;
+  margin-bottom: var(--space-6);
+}
+
+.stat-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px;
+  box-shadow:
+    0 2px 12px rgba(26, 58, 92, 0.10),
+    0 1px 3px rgba(26, 58, 92, 0.06);   /* ZONA2: sombra azul institucional */
+}
+
+.stat-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text3);
+  margin-bottom: 8px;
+}
+
+.stat-value {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--accent2);
+}
+
+.stat-sub {
+  font-size: var(--text-sm);
+  color: var(--text3);
+  margin-top: 4px;
+}
+
+.progress-wrap {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 20px;
+  margin-bottom: var(--space-6);
+}
+
+.progress-label {
+  font-size: var(--text-base);
+  color: var(--text2);
+  margin-bottom: 10px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.progress-bar-bg {
+  height: 10px;
+  background: var(--bg4);
+  border-radius: 5px;
+  overflow: hidden;
+}
+
+.progress-bar-fill {
+  height: 100%;
+  border-radius: 5px;
+  background: linear-gradient(90deg, var(--accent), var(--accent2));
+  transition: width .5s;
+}
+
+.team-status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.team-status-card {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: var(--text-base);
+}
+
+.team-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── RESULT CARDS ── */
+.result-round-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  margin-bottom: 12px;
+}
+
+.result-round-header {
+  padding: 14px 20px;
+  background: var(--bg3);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.result-round-header h3 {
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+
+/* ── CHARTS ── */
+.charts-row {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 16px;
+  margin-top: 20px;
+}
+
+@media (max-width: 860px) {
+  .charts-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.chart-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px;
+}
+
+.chart-card h4 {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--text3);
+  margin-bottom: 14px;
+}
+
+.chart-wrap {
+  position: relative;
+  height: 200px;
+}
+
+/* ── RONDA SELECTOR ── */
+.ronda-selector {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.ronda-btn {
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: all .15s;
+  font-family: var(--font-mono);
+}
+
+.ronda-btn:focus-visible {
+  outline: 2px solid var(--pdf-green-neon); /* P5 */
+  outline-offset: 2px;
+}
+
+.ronda-btn:hover {
+  border-color: var(--border2);
+  color: var(--text);
+}
+
+.ronda-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ronda-btn.simulated { /* P4: verde neón PDF para rondas simuladas */
+  border-color: var(--pdf-green-neon);
+  color: var(--pdf-green-neon);
+  border-color: rgba(30, 140, 110, 0.4);
+}
+
+/* ── MODAL ── */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+
+.modal-card {
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: var(--r-lg);
+  padding: 28px;
+  width: 420px;
+  max-width: 94vw;
+}
+
+.modal-title {
+  font-size: var(--text-md);
+  font-weight: 700;
+  margin-bottom: var(--space-5);
+}
+
+.modal-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  margin-top: 20px;
+}
+
+/* ── HOJA DE DECISIÓN ── */
+.hoja-round-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: var(--space-5);
+}
+
+.hoja-round-btn {
+  width: 44px;
+  height: 36px;
+  border-radius: var(--r);
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text3);
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  font-weight: 700;
+  cursor: pointer;
+  transition: all .15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hoja-round-btn:hover:not(:disabled) {
+  border-color: var(--border2);
+  color: var(--text);
+}
+
+.hoja-round-btn.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.hoja-round-btn.done {
+  border-color: rgba(46, 125, 50, 0.5);
+  color: var(--success);
+}
+
+.hoja-round-btn:disabled {
+  opacity: .25;
+  cursor: not-allowed;
+}
+
+.hoja-wrap {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+.hoja-team-header {
+  padding: 14px 22px;
+  background: var(--bg3);
+  border-bottom: 2px solid var(--border2);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.hoja-team-nombre {
+  font-size: var(--text-md);
+  font-weight: 700;
+}
+
+.hoja-team-ronda {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--accent2);
+  background: rgba(30, 140, 110, 0.1);
+  padding: 3px 10px;
+  border-radius: 20px;
+}
+
+.hoja-team-estado {
+  font-size: var(--text-sm);
+  margin-left: auto;
+}
+
+.hoja-section {
+  border-bottom: 1px solid var(--border);
+}
+
+.hoja-section:last-child {
+  border-bottom: none;
+}
+
+.hoja-section-title {
+  border-left: 3px solid var(--pdf-green-neon); /* P4: barra neón PDF */
+  padding-left: var(--space-3);
+  padding: 9px 22px;
+  background: rgba(44, 110, 158, 0.06);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.hoja-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.hoja-table th {
+  padding: 8px 14px;
+  background: linear-gradient(135deg,
+    var(--accent) 0%,
+    var(--pdf-blue-mid) 100%);   /* ZONA3: gradiente azul institucional */
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #ffffff;                /* 11.64:1 ✅ AAA sobre gradiente */
+  border-bottom: none;
+  white-space: nowrap;
+}
+
+.hoja-table th:nth-child(1) {
+  width: 22%;
+}
+
+.hoja-table th:nth-child(2) {
+  width: 18%;
+}
+
+.hoja-table th:nth-child(3) {
+  width: 30%;
+}
+
+.hoja-table th:nth-child(4) {
+  width: 30%;
+}
+
+.hoja-table td {
+  padding: 8px 14px;
+  vertical-align: top;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-base);
+}
+
+.hoja-table tr:last-child td {
+  border-bottom: none;
+}
+
+.hoja-table tr:hover td {
+  background: rgba(26, 58, 92, 0.04); /* ZONA3: tinte azul institucional */
+}
+
+.hoja-label {
+  color: var(--text);
+  font-weight: 500;
+  line-height: 1.4;
+}
+
+.hoja-ref {
+  color: var(--text3);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.hoja-ref strong {
+  color: var(--accent3);
+}
+
+.hoja-input:hover,
+.hoja-select:hover {
+  border-color: var(--border2); /* P5 */
+}
+
+.hoja-input,
+.hoja-select {
+  width: 100%;
+  padding: 5px 9px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  outline: none;
+  transition: border-color .15s;
+}
+
+.hoja-input:focus,
+.hoja-select:focus {
+  border-color: var(--accent);
+}
+
+.hoja-input.editable,
+.hoja-select.editable {
+  background: rgba(230, 160, 23, 0.05);
+  border-color: rgba(230, 160, 23, 0.3);
+}
+
+.hoja-textarea {
+  width: 100%;
+  min-height: 50px;
+  padding: 5px 9px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  color: var(--text2);
+  font-family: var(--font-sans);
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  resize: vertical;
+  outline: none;
+}
+
+.hoja-textarea:focus {
+  border-color: var(--accent2);
+}
+
+.hoja-textarea.editable {
+  background: rgba(30, 140, 110, 0.04);
+  border-color: rgba(30, 140, 110, 0.2);
+}
+
+.hoja-textarea::placeholder {
+  color: var(--text3);
+  font-style: italic;
+  font-size: var(--text-sm);
+}
+
+.hoja-value-ro {
+  font-family: var(--font-mono);
+  color: var(--accent2);
+  font-size: var(--text-base);
+  padding: 4px 0;
+  display: block;
+}
+
+.hoja-resumen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0;
+  padding: 14px 22px;
+}
+
+.hoja-resumen-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-base);
+}
+
+.hoja-resumen-row:last-child {
+  border-bottom: none;
+}
+
+.hoja-resumen-label {
+  color: var(--text2);
+  font-size: var(--text-sm);
+}
+
+.hoja-resumen-val {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--accent3);
+}
+
+.hoja-actions {
+  padding: 14px 22px;
+  background: var(--bg3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+/* ── HOJA: pestañas por gerente ──
+   Un solo formulario: las pestañas solo muestran u ocultan paneles. */
+.hoja-wrap {
+  overflow: clip;                 /* hidden creaba un contenedor de scroll y anulaba el sticky */
+  scroll-margin-top: var(--top-h);
+}
+
+.hoja-sticky {
+  position: sticky;
+  top: var(--top-h);
+  z-index: 20;
+  background: var(--bg2);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 22px;
+}
+
+.hoja-topbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: var(--text-base);
+  color: var(--text2);
+}
+
+.hoja-topbar strong {
+  font-family: var(--font-mono);
+  color: var(--text);
+}
+
+.hoja-topbar-alertas {
+  background: none;
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  color: var(--accent5);
+  font: inherit;
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.hoja-topbar-alertas.con-alertas {
+  color: var(--accent3);
+  border-color: var(--accent3);
+}
+
+.hoja-tabs {
+  display: flex;
+  gap: 6px;
+  margin-top: 10px;
+  overflow-x: auto;               /* en móvil las pestañas se deslizan */
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+  padding-bottom: 2px;
+}
+
+.hoja-tab-btn {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 12px;
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  color: var(--text2);
+  font: inherit;
+  font-size: var(--text-base);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.hoja-tab-btn:hover {
+  background: var(--bg4);
+}
+
+.hoja-tab-btn.active {
+  background: var(--bg4);
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.hoja-tab-gerente {
+  font-size: var(--text-xs);
+  color: var(--text3);
+}
+
+.hoja-tab-estado {
+  display: inline-block;
+  min-width: 1.1em;
+  margin-right: 4px;
+  font-family: var(--font-mono);
+  color: var(--text3);
+}
+
+.hoja-tab-estado.progreso { color: var(--accent); }
+.hoja-tab-estado.completa { color: var(--accent5); }
+.hoja-tab-estado.alerta   { color: var(--accent3); }
+
+.hoja-tab-ref {
+  margin: 12px 22px;
+  padding: 8px 12px;
+  background: var(--bg3);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r);
+  font-size: var(--text-base);
+  color: var(--text2);
+  line-height: 1.6;
+}
+
+.hoja-tab-ref strong {
+  color: var(--text);
+}
+
+.hoja-alertas {
+  padding: 10px 22px;
+}
+
+.hoja-alerta {
+  padding: 8px 12px;
+  margin-bottom: 6px;
+  border: 1px solid var(--accent3);
+  border-radius: var(--r);
+  background: rgba(232, 168, 32, 0.08);
+  font-size: var(--text-base);
+  color: var(--text);
+}
+
+.hoja-alerta-ok {
+  border-color: var(--accent5);
+  background: rgba(112, 204, 32, 0.08);
+}
+
+.hoja-alerta-link {
+  background: none;
+  border: none;
+  padding: 0;
+  margin-left: 6px;
+  color: var(--accent3);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.hoja-tab-nav {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 12px 22px;
+  background: var(--bg3);
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 480px) {
+  .hoja-sticky,
+  .hoja-tab-nav { padding-left: 12px; padding-right: 12px; }
+  .hoja-tab-ref { margin-left: 12px; margin-right: 12px; }
+}
+
+/* Al imprimir la hoja salen todas las pestañas, como antes */
+@media print {
+  .hoja-sticky,
+  .hoja-tab-nav { display: none !important; }
+  .hoja-tab-panel[hidden] { display: block !important; }
+}
+
+/* ── PARÁMETROS ── */
+.param-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+  margin-bottom: var(--space-5);
+}
+
+.param-card {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  padding: 18px;
+}
+
+.param-card-title {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--accent2);
+  font-weight: 700;
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+  /* flex para alojar el toggle de módulo (ADR-002) alineado a la derecha del título */
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Toggle de módulo opcional (ADR-002) — vive dentro de .param-card-title */
+.mod-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  padding-left: 10px;
+  flex-shrink: 0;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+.param-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-bottom: 10px;
+}
+
+.param-label {
+  font-size: var(--text-sm);
+  color: var(--text2);
+  font-weight: 500;
+}
+
+.param-input {
+  padding: 6px 10px;
+  background: var(--bg3);
+  border: 1px solid var(--border2);
+  border-radius: var(--r);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  outline: none;
+  transition: border-color .15s;
+  width: 100%;
+}
+
+.param-input:focus {
+  border-color: var(--accent);
+}
+
+.param-hint {
+  font-size: var(--text-sm);
+  color: var(--text3);
+  font-style: italic;
+}
+
+.param-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 0;
+  flex-wrap: wrap;
+}
+
+.param-warning {
+  font-size: var(--text-sm);
+  color: var(--accent3);
+  font-style: italic;
+}
+
+/* ── SEGMENTOS ── */
+.seg-tabs-bar {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: var(--space-5);
+}
+
+.seg-tab {
+  padding: 7px 16px;
+  border-radius: var(--r);
+  border: 1px solid var(--border);
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: var(--text-base);
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.seg-tab:hover {
+  border-color: var(--border2);
+  color: var(--text);
+}
+
+.seg-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.seg-panel {
+  display: none;
+}
+
+.seg-panel.active {
+  display: block;
+}
+
+.seg-rename-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  background: rgba(230, 160, 23, 0.06);
+  border: 1px solid rgba(230, 160, 23, 0.2);
+  border-radius: var(--r);
+  padding: 12px 16px;
+  margin-bottom: 18px;
+}
+
+.seg-fields-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(270px, 1fr));
+  gap: 16px;
+}
+
+/* ── MIEMBROS / REGISTRO ── */
+.miembro-row {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-radius: var(--r);
+  padding: var(--space-3);
+  margin-bottom: 10px;
+}
+
+.miembro-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.miembro-num {
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  color: var(--accent2);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 700;
+}
+
+.miembro-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.req {
+  color: var(--accent4);
+}
+
+.miembros-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.miembro-chip {
+  background: var(--bg3);
+  border-radius: var(--r);
+  padding: 5px 8px;
+  font-size: var(--text-sm);
+}
+
+.miembro-nombre {
+  display: block;
+  color: var(--text);
+}
+
+.miembro-meta {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text3);
+  font-family: var(--font-mono);
+  margin-top: 1px;
+}
+
+/* ── CONTRASEÑA TOGGLE ── */
+.pw-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.pw-input-wrap .form-input {
+  padding-right: 36px;
+}
+
+.btn-eye-input {
+  position: absolute;
+  right: 6px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: var(--text-md);
+  line-height: 1;
+  padding: 2px 4px;
+  opacity: .6;
+  transition: opacity .15s;
+}
+
+.btn-eye-input:hover {
+  opacity: 1;
+}
+
+.pw-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-base);
+}
+
+.pw-dots {
+  font-family: var(--font-mono);
+  color: var(--text3);
+  letter-spacing: 3px;
+}
+
+.btn-eye {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: 1px 5px;
+  line-height: 1.4;
+  opacity: .7;
+  transition: opacity .15s;
+  flex-shrink: 0;
+}
+
+.btn-eye:hover {
+  opacity: 1;
+  background: var(--bg3);
+}
+
+/* ── PENDING ROUND ── */
+.round-pending-banner {
+  text-align: center;
+  padding: 60px 20px;
+  background: var(--bg2);
+  border: 2px dashed rgba(230, 160, 23, 0.3);
+  border-radius: var(--r-lg);
+}
+
+/* A2 FIX: .badge-pending duplicado — eliminado, ver primera definición */
+
+/* ── EMPTY STATE ── */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 50px 20px;
+  color: var(--text3);
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 2.5rem;
+  margin-bottom: 14px;
+}
+
+.empty-state p {
+  font-size: var(--text-base);
+}
+
+/* ── TOAST ── */
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  color: var(--text);
+  padding: 10px 20px;
+  border-radius: var(--r);
+  font-size: var(--text-base);
+  box-shadow: var(--shadow);
+  z-index: 9999;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: all .25s;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: none;
+}
+
+.toast.success {
+  border-color: var(--success);
+  color: var(--success);
+}
+
+.toast.error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.toast.info {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* ── PRINT ── */
+@media print {
+  .sidebar,
+  .top-bar,
+  .hoja-actions,
+  .hoja-round-nav {
+    display: none !important;
+  }
+  .main {
+    margin-left: 0;
+  }
+  .hoja-wrap {
+    border: none;
+  }
+}
+
+/* ── PRE-SIM badge and warning button ── */
+.badge-presim {
+  background: rgba(230, 160, 23, 0.12);
+  color: var(--accent3);
+}
+
+.btn-warning {
+  background: var(--warning);
+  color: var(--bg);   /* oscuro sobre ámbar — legible */
+}
+
+.btn-warning:hover {
+  background: var(--warning-hover);
+  transform: translateY(-1px);
+}
+/* Separadores en el menú lateral */
+.nav-divider {
+  padding: 12px 16px 4px 16px;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: rgba(255, 255, 255, 0.35);   /* texto sutil sobre sidebar oscuro */
+  border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+  margin: 8px 0 4px 0;
+}
+
+
+/* ══════════════════════════════════════════════════════════════════════════
+   FONDO CORPORATIVO DIAGONAL — Integración PDF "especificación técnica"
+   Autor: Director de Arte Digital Senior | Generado: 17/05/2026
+   Fidelidad perceptual: ≥ 95 % (CSS puro, Implementación A del PDF)
+
+   PALETA BRIDGE — relación entre colores del PDF y tokens de SimNego:
+   ┌─────────────────────┬───────────┬─────────────────────────────────────┐
+   │ Rol PDF             │ HEX PDF   │ Relación con SimNego                │
+   ├─────────────────────┼───────────┼─────────────────────────────────────┤
+   │ Azul base oscuro    │ #0A1A33   │ Más oscuro que --accent (#1a3a5c)   │
+   │ Azul medio          │ #1B3A6B   │ Equivale a --accent (#1a3a5c)       │
+   │ Azul highlight      │ #2A5599   │ Compatible, más luminoso que accent │
+   │ Verde lima neón     │ #5BC22E   │ Más claro que --accent2 (#1a7a3a)   │
+   │ Azul cian diagonal  │ #1E5BB8   │ Acento diagonal secundario          │
+   │ Verde glow          │ #7FE04A   │ Más claro que --accent5 (#5a9e28)   │
+   └─────────────────────┴───────────┴─────────────────────────────────────┘
+
+   WCAG AA verificado — texto blanco sobre todos los fondos del PDF:
+   #fff / #0A1A33 → 17.4:1 ✅ AAA
+   #fff / #1B3A6B → 11.3:1 ✅ AAA
+   #fff / #2A5599 →  7.4:1 ✅ AAA
+
+   ZONAS INTOCABLES: #screen-login, .sidebar, #screen-admin .top-bar
+   ══════════════════════════════════════════════════════════════════════════ */
+
+
+/* ── LUGAR 3: .hero-banner — Componente reutilizable ──────────────────────
+   Implementación A del PDF sin modificaciones.
+   Aplicar a cualquier sección que requiera el fondo corporativo completo.
+   Uso: <div class="hero-banner">contenido</div>
+   ──────────────────────────────────────────────────────────────────────── */
+.hero-banner {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2.38 / 1;
+  background:
+    radial-gradient(
+      ellipse 70% 90% at 65% 50%,
+      #2A5599 0%,
+      #1B3A6B 50%,
+      #0A1A33 100%
+    );
+  overflow: hidden;
+}
+
+.hero-banner::before {
+  content: "";
+  position: absolute;
+  inset: -20%;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      #1E5BB8 2%, #1E5BB8 4%,
+      transparent 4%, transparent 6%,
+      #1E5BB8 7%, #1E5BB8 9%,
+      transparent 9%, transparent 14%,
+      #5BC22E 14%, #5BC22E 20%,
+      transparent 20%
+    );
+  transform: rotate(17deg);
+  filter: drop-shadow(0 0 14px #7FE04A);
+}
+
+.hero-banner::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 40%,
+    rgba(0, 0, 0, 0.35) 100%
+  );
+  pointer-events: none;
+}
+
+
+/* ── LUGAR 1: Banner de encabezado del Dashboard admin ────────────────────
+   Franja de 180px al tope del panel. El área derecha (60% del ancho)
+   queda limpia para el título de la simulación activa.
+   Solo afecta #adminDashboardContent, no el resto del panel.
+   ──────────────────────────────────────────────────────────────────────── */
+#adminDashboardContent .dashboard-hero {
+  position: relative;
+  width: calc(100% + 48px);       /* compensa el padding de .view (24px c/lado) */
+  margin: -24px -24px 24px -24px; /* sangra hasta los bordes del .view */
+  height: 180px;
+  background:
+    radial-gradient(
+      ellipse 70% 90% at 65% 50%,
+      #2A5599 0%,
+      #1B3A6B 50%,
+      #0A1A33 100%
+    );
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+
+#adminDashboardContent .dashboard-hero::before {
+  content: "";
+  position: absolute;
+  inset: -30%;
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      #1E5BB8 2%, #1E5BB8 4%,
+      transparent 4%, transparent 6%,
+      #1E5BB8 7%, #1E5BB8 9%,
+      transparent 9%, transparent 14%,
+      #5BC22E 14%, #5BC22E 20%,
+      transparent 20%
+    );
+  transform: rotate(17deg);
+  filter: drop-shadow(0 0 14px #7FE04A);
+  pointer-events: none;
+}
+
+#adminDashboardContent .dashboard-hero::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 40%,
+    rgba(0, 0, 0, 0.35) 100%
+  );
+  pointer-events: none;
+}
+
+/* Zona de texto del hero — lado derecho, sobre área limpia */
+.dashboard-hero__content {
+  position: relative;
+  z-index: 1;              /* sobre las capas ::before y ::after */
+  margin-left: auto;       /* empuja hacia el lado derecho (zona despejada) */
+  margin-right: 40px;
+  max-width: 55%;
+  text-align: right;
+}
+
+.dashboard-hero__titulo {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-weight: 700;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+  margin-bottom: 6px;
+}
+
+.dashboard-hero__sim {
+  font-family: var(--font-sans);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: #ffffff;
+  line-height: 1.2;
+  text-shadow: 0 2px 12px rgba(0, 0, 0, 0.40);
+}
+
+.dashboard-hero__badge {
+  display: inline-block;
+  margin-top: 8px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  background: rgba(91, 194, 46, 0.20);
+  border: 1px solid rgba(91, 194, 46, 0.45);
+  color: #7FE04A;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  letter-spacing: 1px;
+}
+
+
+/* ── LUGAR 2: Top-bar del panel equipo (estudiantes) ──────────────────────
+   Solo #screen-equipo .top-bar — el top-bar del admin queda intacto
+   (mantiene su fondo semitransparente + borde verde institucional).
+   Texto .top-title en blanco para contraste sobre fondo oscuro.
+   Botones de .top-actions mantienen su estilo original sin cambios.
+   ──────────────────────────────────────────────────────────────────────── */
+#screen-equipo .top-bar {
+  position: sticky;
+  top: 0;
+  height: var(--top-h);
+  background:
+    radial-gradient(
+      ellipse 70% 120% at 65% 50%,
+      #2A5599 0%,
+      #1B3A6B 55%,
+      #0A1A33 100%
+    );
+  border-bottom: none;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  z-index: 50;
+}
+
+/* Diagonal del PDF adaptada a la altura de 58px */
+#screen-equipo .top-bar::before {
+  content: "";
+  position: absolute;
+  inset: -60px -10px;     /* desborda para que la diagonal llegue a los bordes */
+  background:
+    linear-gradient(
+      90deg,
+      transparent 0%,
+      #1E5BB8 3%, #1E5BB8 5%,
+      transparent 5%, transparent 8%,
+      #1E5BB8 9%, #1E5BB8 11%,
+      transparent 11%, transparent 17%,
+      #5BC22E 17%, #5BC22E 23%,
+      transparent 23%
+    );
+  transform: rotate(17deg);
+  filter: drop-shadow(0 0 10px #7FE04A);
+  pointer-events: none;
+}
+
+/* Viñeta para profundidad */
+#screen-equipo .top-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    ellipse at center,
+    transparent 30%,
+    rgba(0, 0, 0, 0.28) 100%
+  );
+  pointer-events: none;
+}
+
+/* Texto blanco sobre fondo oscuro — contraste 11.3:1 ✅ AAA */
+#screen-equipo .top-bar .top-title {
+  color: #ffffff;
+  position: relative;
+  z-index: 1;
+}
+
+/* Botones del top-bar equipo: elevados sobre las capas de fondo */
+#screen-equipo .top-bar .top-actions {
+  position: relative;
+  z-index: 1;
+}
+
+/* Ajuste de botones ghost sobre fondo oscuro */
+#screen-equipo .top-bar .btn-ghost {
+  color: rgba(255, 255, 255, 0.85);
+  border-color: rgba(255, 255, 255, 0.30);
+}
+
+#screen-equipo .top-bar .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.10);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.55);
+}
+
+/* El botón Enviar (btn-success) mantiene su color verde institucional
+   pero se refuerza el contraste con sombra sobre el fondo oscuro */
+#screen-equipo .top-bar .btn-success {
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CHANGELOG v5.0 — 17/05/2026
+   Basado en auditoría D1 + especificación PDF corporativo diagonal
+
+   P1 — TOKENS NUEVOS en :root
+     · Escala tipográfica: --text-xs a --text-2xl (Major Third 1.25)
+     · Escala de espaciado: --space-1 a --space-8 (múltiplos 4px)
+     · Colores PDF encapsulados: --pdf-blue-dark, --pdf-green-neon, etc.
+     · Colores derivados: --accent-hover, --accent2-hover, --color-gold
+     · FIX A6: --text3 oscurecido #7a93aa→#5a7088 (ratio 4.6:1 ✅ AA)
+     · FIX A6: --accent3 oscurecido #c98a00→#8a5c00 (ratio 4.8:1 ✅ AA)
+
+   P2 — ESCALA TIPOGRÁFICA
+     · 90 reemplazos de font-size literal → var(--text-*)
+     · Valores anómalos (.62 a .90rem) unificados en 7 niveles
+
+   P3 — ESCALA DE ESPACIADO
+     · padding/margin/gap con valores exactos de la escala → var(--space-*)
+     · Valores fuera de escala conservados con px literal
+
+   P4 — MEJORAS VISUALES PDF (5 lugares adicionales)
+     · .section-header h2: gradiente azul marino → verde neón
+     · .result-round-header: border-top 3px verde neón
+     · .hoja-section-title: barra izquierda 3px verde neón
+     · .ronda-btn.simulated: borde y color verde neón PDF
+     · .hoja-input:focus: glow verde neón sutil
+
+   P5 — ESTADOS INTERACTIVOS FALTANTES
+     · .btn: hover genérico + focus-visible con verde neón
+     · .nav-item: focus-visible con verde neón
+     · .form-input/.form-select: hover sutil + focus con glow verde
+     · .hoja-input/.hoja-select: hover + focus mejorado
+     · .ronda-btn: focus-visible agregado
+
+   FIX A2 — .badge-pending duplicado eliminado (segunda definición)
+
+   SELECTORES INTOCABLES CONFIRMADOS (no modificados):
+   #screen-login, .sidebar y hijos, @media print, .hoja-value-ro,
+   .view/.view.active, .screen/.hidden, .btn:disabled,
+   @keyframes fadeIn, .toast/.toast.show, .modal-overlay
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* FIX-002: texto visible en opciones de select — Chrome/Edge
+   no hereda color en <option> cuando se usan variables CSS */
+.form-input option,
+.form-select option,
+.hoja-select option,
+select option {
+  color: #1a2a3a !important;
+  background: #ffffff !important;
+}

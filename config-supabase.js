@@ -5,6 +5,14 @@
 (function () {
   var BASE = window.SIMMKT_API_BASE || 'https://ayqxtjtqftwdjnidtesh.supabase.co/functions/v1/smaa';
   window.SIMMKT_API = BASE;
+  // La función corre por defecto en la región más cercana al usuario (sa-east-1 desde Bolivia) y la
+  // base está en us-east-1: cada consulta cruzaba el continente (~115 ms ida y vuelta, cientos por
+  // pedido). forceFunctionRegion la ejecuta junto a la base. Va como parámetro y no como encabezado
+  // x-region para no cambiar el CORS (el preflight no lo permite).
+  var REGION = window.SIMMKT_API_REGION === undefined ? 'us-east-1' : window.SIMMKT_API_REGION;
+  function conRegion(u) {
+    return REGION ? u + (u.indexOf('?') >= 0 ? '&' : '?') + 'forceFunctionRegion=' + encodeURIComponent(REGION) : u;
+  }
   var CLAVE = 'smaa_sid';
   function leer() { try { return sessionStorage.getItem(CLAVE) || ''; } catch (e) { return window.__smaaSid || ''; } }
   function guardar(v) {
@@ -21,7 +29,7 @@
     if (sid) h.set('x-sid', sid);
     h.delete('Authorization');
     o.headers = h;
-    return fetchOriginal(BASE + entrada, o).then(function (r) {
+    return fetchOriginal(conRegion(BASE + entrada), o).then(function (r) {
       var nuevo = r.headers.get('x-sid');
       if (nuevo !== null) guardar(nuevo);
       return r;
